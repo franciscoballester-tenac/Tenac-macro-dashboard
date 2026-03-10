@@ -12,6 +12,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import dropbox
 import io
+from dropbox.common import PathRoot
 
 # 1. Page Configuration
 st.set_page_config(page_title="Tenac | Macro Dashboard", page_icon="📊", layout="wide")
@@ -30,11 +31,20 @@ USE_DROPBOX_API = "DROPBOX_APP_KEY" in st.secrets
 @st.cache_resource
 def get_dropbox_client():
     if USE_DROPBOX_API:
-        return dropbox.Dropbox(
+        dbx = dropbox.Dropbox(
             app_key=st.secrets["DROPBOX_APP_KEY"],
             app_secret=st.secrets["DROPBOX_APP_SECRET"],
             oauth2_refresh_token=st.secrets["DROPBOX_REFRESH_TOKEN"]
         )
+        # Magia para cuentas de Dropbox Business (Team Space)
+        try:
+            account = dbx.users_get_current_account()
+            root_ns = account.root_info.root_namespace_id
+            dbx = dbx.with_path_root(PathRoot.root(root_ns))
+        except Exception as e:
+            print(f"Aviso de Dropbox Business: {e}")
+            
+        return dbx
     return None
 
 def get_file(route):
@@ -960,4 +970,5 @@ if len(selected_countries) == 2 and not df_filtered.empty:
     fig_spread.update_yaxes(gridcolor='rgba(255, 255, 255, 0.1)')
     st.plotly_chart(fig_spread, use_container_width=True)
 elif len(selected_countries) != 2 and selected_countries:
+
     st.caption("📌 Select exactly 2 countries to see the spread.")
