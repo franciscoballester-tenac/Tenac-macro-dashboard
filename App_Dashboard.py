@@ -14,6 +14,29 @@ import dropbox
 import io
 from dropbox.common import PathRoot
 
+# --- SISTEMA DE CONTRASEÑA ---
+def check_password():
+    def password_entered():
+        if st.session_state["password"] == "0220": # <-- CAMBIÁ ESTA CLAVE POR LA QUE QUIERAS
+            st.session_state["password_correct"] = True
+            del st.session_state["password"] 
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        st.text_input("🔒 Ingresá la contraseña para acceder al Dashboard:", type="password", on_change=password_entered, key="password")
+        return False
+    elif not st.session_state["password_correct"]:
+        st.text_input("🔒 Ingresá la contraseña para acceder al Dashboard:", type="password", on_change=password_entered, key="password")
+        st.error("Contraseña incorrecta. Intentá de nuevo.")
+        return False
+    return True
+
+if not check_password():
+    st.stop() # Esto frena la carga de los gráficos si no ponen la clave
+# -----------------------------
+
+
 # 1. Page Configuration
 st.set_page_config(page_title="Tenac | Macro Dashboard", page_icon="📊", layout="wide")
 st.markdown("""
@@ -972,3 +995,4 @@ if len(selected_countries) == 2 and not df_filtered.empty:
 elif len(selected_countries) != 2 and selected_countries:
 
     st.caption("📌 Select exactly 2 countries to see the spread.")
+
