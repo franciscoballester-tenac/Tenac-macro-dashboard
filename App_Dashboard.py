@@ -302,6 +302,19 @@ COUNTRY_GROUPS = {
     "DM Americas":  ["USA","CAN"],
 }
 
+# ─────────────────────────────────────────────
+# Helper: detecta cuántas filas de metadata saltar
+# ─────────────────────────────────────────────
+def _get_skiprows(source, sheet_name=0):
+    """Detecta dinámicamente skiprows para archivos con o sin metadata header."""
+    _meta = {'description', 'source', 'unit', 'frequency', 'sa'}
+    if hasattr(source, 'seek'):
+        source.seek(0)
+    _peek = pd.read_excel(source, sheet_name=sheet_name, nrows=10, header=None)
+    if hasattr(source, 'seek'):
+        source.seek(0)
+    return next((i for i, v in enumerate(_peek.iloc[:, 0]) if str(v).strip().lower() not in _meta), 0)
+
 # 5. Cached loading functions
 @st.cache_data
 def load_iso_mapping(iso_route):
@@ -317,8 +330,10 @@ def load_iso_mapping(iso_route):
 
 @st.cache_data
 def load_and_transform_data(route, sheet, iso_mapping, iso_format, calc_type=None, gdp_route=None, drop_projections=False):
-    df = pd.read_excel(get_file(route), sheet_name=sheet, index_col=0)
-    
+    source = get_file(route)
+    _skip = _get_skiprows(source, sheet)
+    df = pd.read_excel(source, sheet_name=sheet, index_col=0, skiprows=_skip)
+
     df = df[df.index.notna()]
     if pd.api.types.is_numeric_dtype(df.index):
         df.index = pd.to_datetime(df.index.astype(int).astype(str))
@@ -371,7 +386,9 @@ def load_and_transform_data(route, sheet, iso_mapping, iso_format, calc_type=Non
 
 @st.cache_data
 def load_real_mpr(mpr_route, cpi_route, iso2_mapping, iso3_mapping):
-    df_mpr = pd.read_excel(get_file(mpr_route), sheet_name="Sheet1", index_col=0)
+    src_mpr = get_file(mpr_route)
+    df_mpr = pd.read_excel(src_mpr, sheet_name="Sheet1", index_col=0,
+                           skiprows=_get_skiprows(src_mpr, "Sheet1"))
     df_mpr.index = pd.to_datetime(df_mpr.index)
     df_mpr = df_mpr.sort_index()
     df_mpr.columns = [str(c).strip() for c in df_mpr.columns]
@@ -383,7 +400,9 @@ def load_real_mpr(mpr_route, cpi_route, iso2_mapping, iso3_mapping):
     if iso2_mapping:
         df_mpr.rename(columns=iso2_mapping, inplace=True)
 
-    df_cpi = pd.read_excel(get_file(cpi_route), sheet_name="YoY", index_col=0)
+    src_cpi = get_file(cpi_route)
+    df_cpi = pd.read_excel(src_cpi, sheet_name="YoY", index_col=0,
+                           skiprows=_get_skiprows(src_cpi, "YoY"))
     df_cpi.index = pd.to_datetime(df_cpi.index)
     df_cpi = df_cpi.sort_index()
     df_cpi.columns = [str(c).strip() for c in df_cpi.columns]
