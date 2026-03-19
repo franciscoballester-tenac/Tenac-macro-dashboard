@@ -90,7 +90,7 @@ if USE_DROPBOX_API:
     ISO_PATH = "RESEARCH/Database/ISO_Master_Table.xlsx"
     MACRO_MONITOR_PATH = "RESEARCH/Main Monitors/Macro Monitors/Macro_Monitor_2.xlsx"
     LOGO_PATH = "RESEARCH/Database/Claude/Logo.png"
-    IT_POLITICS_PATH = "RESEARCH/Main Monitors/Macro Monitors/Decks/IT_Politics.xlsx"
+    IT_POLITICS_PATH = "RESEARCH/Database//IT_Politics.xlsx"
 else:
     def get_base_path():
         home = os.path.expanduser("~")
@@ -106,7 +106,7 @@ else:
     ISO_PATH = os.path.join(DB_BASE_PATH, "ISO_Master_Table.xlsx")
     MACRO_MONITOR_PATH = os.path.join(DROPBOX_PATH, "RESEARCH", "Main Monitors", "Macro Monitors", "Macro_Monitor_2.xlsx")
     LOGO_PATH = os.path.join(DB_BASE_PATH, "Claude", "Logo.png")
-    IT_POLITICS_PATH = os.path.join(DROPBOX_PATH, "RESEARCH", "Main Monitors", "Macro Monitors", "Decks", "IT_Politics.xlsx")
+    IT_POLITICS_PATH = os.path.join(DB_BASE_PATH, "IT_Politics.xlsx")
 
 # 3. MASTER DICTIONARY
 DATABASES = {
