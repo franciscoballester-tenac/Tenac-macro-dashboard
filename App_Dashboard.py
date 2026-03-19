@@ -110,14 +110,16 @@ else:
 
 # 3. MASTER DICTIONARY
 DATABASES = {
-    "Inflation (CPI)": {
+    "Inflation": {
         "file": "IMF/IMF_CPI_Global_iData.xlsx",
         "iso_format": "ISO3",
         "source": "IMF",
         "metrics": {
-            "YoY":      {"sheet": "YoY",  "calc": None, "fmt": ".1f"},
-            "MoM sa":   {"sheet": "MoM",  "calc": None, "fmt": ".1f"},
-            "3m3m saar":{"sheet": "3m3m", "calc": None, "fmt": ".1f"}
+            "YoY":                                    {"sheet": "YoY",  "calc": None, "fmt": ".1f"},
+            "MoM sa":                                 {"sheet": "MoM",  "calc": None, "fmt": ".1f"},
+            "3m3m saar":                              {"sheet": "3m3m", "calc": None, "fmt": ".1f"},
+            "Deviation from IT Center (pp)":          {"sheet": "YoY",  "calc": None, "fmt": ".1f", "loader": "it_deviation"},
+            "Deviation from IT Center 3m3m (pp)":     {"sheet": "3m3m", "calc": None, "fmt": ".1f", "loader": "it_deviation_3m3m"}
         }
     },
     "Gross Domestic Product (GDP)": {
@@ -126,7 +128,7 @@ DATABASES = {
         "source": "IMF",
         "metrics": {
             "GDP YoY (Year-over-Year)":    {"sheet": "GDP_NSA", "calc": "yoy_quarterly", "fmt": ".1f"},
-            "GDP QoQ saar (Annualized)":   {"sheet": "GDP_SA",  "calc": "qoq_saar",      "fmt": ".1f"}
+            "GDP QoQ saar":                {"sheet": "GDP_SA",  "calc": "qoq_saar",      "fmt": ".1f"}
         }
     },
     "Balance of Payments (BOP)": {
@@ -262,15 +264,15 @@ DATABASES = {
 # Cross Variable: grouped variable menu
 CV_VARIABLES = {
     "Inflation": [
-        ("YoY",                        "Inflation (CPI)",                    "YoY"),
-        ("3m3m saar",                  "Inflation (CPI)",                    "3m3m saar"),
-        ("MoM sa",                     "Inflation (CPI)",                    "MoM sa"),
+        ("YoY",                        "Inflation",                          "YoY"),
+        ("3m3m saar",                  "Inflation",                          "3m3m saar"),
+        ("MoM sa",                     "Inflation",                          "MoM sa"),
         ("Deviation from target",      "Inflation Target Deviation",         "Deviation from IT Center (pp)"),
         ("Dev. from target (3m3m)",    "Inflation Target Deviation (3m3m)",  "Deviation from IT Center 3m3m (pp)"),
     ],
     "Growth": [
         ("YoY",      "Gross Domestic Product (GDP)", "GDP YoY (Year-over-Year)"),
-        ("QoQ saar", "Gross Domestic Product (GDP)", "GDP QoQ saar (Annualized)"),
+        ("QoQ saar", "Gross Domestic Product (GDP)", "GDP QoQ saar"),
     ],
     "External": [
         ("Current Account (% GDP)",          "Balance of Payments (BOP)", "Current Account (% of GDP, 4Q rolling sum)"),
@@ -311,7 +313,7 @@ CV_VARIABLES = {
 
 # 4. Category grouping for the sidebar
 CATEGORY_GROUPS = {
-    "Macro":             ["Inflation (CPI)", "Gross Domestic Product (GDP)", "Inflation Target Deviation", "Inflation Target Deviation (3m3m)"],
+    "Macro":             ["Inflation", "Gross Domestic Product (GDP)"],
     "Fiscal":            ["Fiscal Monitor (FM)"],
     "External Sector":   ["Balance of Payments (BOP)", "International Reserves", "Energy Net Exports", "Commodity Terms of Trade"],
     "Monetary Policy":   ["Monetary Policy Rate"],
@@ -329,7 +331,7 @@ pio.templates.default = "plotly_dark+tenac"
 
 COUNTRY_VIEW_METRICS = [
     ("Macro",    "GDP Growth YoY (%)",          "Gross Domestic Product (GDP)",   "GDP YoY (Year-over-Year)",                      ".1f"),
-    ("Macro",    "Inflation YoY (%)",            "Inflation (CPI)",                "YoY",                                           ".1f"),
+    ("Macro",    "Inflation YoY (%)",            "Inflation",                      "YoY",                                           ".1f"),
     ("Macro",    "IT Deviation (pp)",            "Inflation Target Deviation",     "Deviation from IT Center (pp)",                 ".1f"),
     ("Fiscal",   "Primary Balance (% GDP)",      "Fiscal Monitor (FM)",            "Primary Balance (% of GDP)",                    ".1f"),
     ("Fiscal",   "Overall Balance (% GDP)",      "Fiscal Monitor (FM)",            "Overall Balance (% of GDP)",                    ".1f"),
@@ -582,7 +584,8 @@ def load_df_for_metric(db_key, metric_key):
     iso_format = db_cfg["iso_format"]
     loader     = db_cfg.get("loader", "default")
     m_cfg      = db_cfg["metrics"][metric_key]
-    
+    metric_loader = m_cfg.get("loader", loader)
+
     try:
         if loader == "bbg_fx":
             return transform_bbg_fx(load_bbg_indicator_raw(file_route, "FX"), iso_dicts[iso_format], m_cfg["calc"])
@@ -596,9 +599,9 @@ def load_df_for_metric(db_key, metric_key):
             return df.rename(columns=iso_dicts[iso_format])
         if loader == "em_spreads":
             return load_em_spreads(file_route, iso_dicts[iso_format])
-        if loader == "it_deviation":
+        if metric_loader == "it_deviation":
             return load_it_deviation(file_route, IT_POLITICS_PATH, iso_dicts["ISO3"])
-        if loader == "it_deviation_3m3m":
+        if metric_loader == "it_deviation_3m3m":
             return load_it_deviation(file_route, IT_POLITICS_PATH, iso_dicts["ISO3"], cpi_sheet="3m3m")
         if m_cfg["calc"] == "real_mpr":
             cpi_route = os.path.join(DB_BASE_PATH, "IMF/IMF_CPI_Global_iData.xlsx").replace("\\", "/")
@@ -1077,6 +1080,7 @@ iso_format  = db_config["iso_format"]
 loader      = db_config.get("loader", "default")
 friendly_metric = st.sidebar.selectbox("3️⃣ Select Metric:", list(db_config["metrics"].keys()))
 m_cfg = db_config["metrics"][friendly_metric]
+metric_loader = m_cfg.get("loader", loader)
 
 # --- Dispatch to the right loader ---
 try:
@@ -1093,9 +1097,9 @@ try:
         df = df.rename(columns=iso_dicts[iso_format])
     elif loader == "em_spreads":
         df = load_em_spreads(file_route, iso_dicts[iso_format])
-    elif loader == "it_deviation":
+    elif metric_loader == "it_deviation":
         df = load_it_deviation(file_route, IT_POLITICS_PATH, iso_dicts["ISO3"])
-    elif loader == "it_deviation_3m3m":
+    elif metric_loader == "it_deviation_3m3m":
         df = load_it_deviation(file_route, IT_POLITICS_PATH, iso_dicts["ISO3"], cpi_sheet="3m3m")
     elif m_cfg["calc"] == "real_mpr":
         cpi_route = os.path.join(DB_BASE_PATH, "IMF/IMF_CPI_Global_iData.xlsx").replace("\\", "/")
