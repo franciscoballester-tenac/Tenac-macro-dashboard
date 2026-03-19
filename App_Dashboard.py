@@ -249,6 +249,54 @@ DATABASES = {
     }
 }
 
+# Cross Variable: grouped variable menu
+CV_VARIABLES = {
+    "Inflation": [
+        ("YoY",                   "Inflation (CPI)",            "YoY"),
+        ("3m3m saar",             "Inflation (CPI)",            "3m3m saar"),
+        ("MoM sa",                "Inflation (CPI)",            "MoM sa"),
+        ("Deviation from target", "Inflation Target Deviation", "Deviation from IT Center (pp)"),
+    ],
+    "Growth": [
+        ("YoY",      "Gross Domestic Product (GDP)", "GDP YoY (Year-over-Year)"),
+        ("QoQ saar", "Gross Domestic Product (GDP)", "GDP QoQ saar (Annualized)"),
+    ],
+    "External": [
+        ("Current Account (% GDP)",          "Balance of Payments (BOP)", "Current Account (% of GDP, 4Q rolling sum)"),
+        ("FDI (% GDP)",                      "Balance of Payments (BOP)", "Net FDI (% of GDP, 4Q rolling sum)"),
+        ("Reserves (% GDP)",                 "International Reserves",    "Reserves (% of GDP)"),
+        ("Energy Net Exports (% GDP)",       "Energy Net Exports",        "Total Energy Net Exports (% of GDP)"),
+        ("Oil Net Exports (% GDP)",          "Energy Net Exports",        "Oil Net Exports (% of GDP)"),
+        ("Natural Gas Net Exports (% GDP)",  "Energy Net Exports",        "Natural Gas Net Exports (% of GDP)"),
+    ],
+    "Fiscal": [
+        ("Revenue (% GDP)",         "Fiscal Monitor (FM)", "Revenue (% of GDP)"),
+        ("Expenditure (% GDP)",     "Fiscal Monitor (FM)", "Expenditure (% of GDP)"),
+        ("Gross Debt (% GDP)",      "Fiscal Monitor (FM)", "Gross Debt (% of GDP)"),
+        ("Overall Balance (% GDP)", "Fiscal Monitor (FM)", "Overall Balance (% of GDP)"),
+        ("Primary Balance (% GDP)", "Fiscal Monitor (FM)", "Primary Balance (% of GDP)"),
+    ],
+    "Terms of Trade": [
+        ("ToT (10Y avg = 100)", "Commodity Terms of Trade", "Terms of Trade (10Y avg = 100)"),
+        ("ToT Var YoY (%)",     "Commodity Terms of Trade", "Terms of Trade Var YoY (%)"),
+    ],
+    "Monetary Policy": [
+        ("Policy Rate (%)", "Monetary Policy Rate", "Policy Rate (%)"),
+        ("Real MPR (%)",    "Monetary Policy Rate", "Real MPR (%)"),
+    ],
+    "Exchange Rates": [
+        ("FX MoM (%)",         "FX",                          "FX Var MoM (%)"),
+        ("FX YoY (%)",         "FX",                          "FX Var YoY (%)"),
+        ("REER (10Y avg=100)", "Real Effective Exchange Rate", "REER Broad (10Y avg = 100)"),
+        ("REER YoY (%)",       "Real Effective Exchange Rate", "REER Var YoY (%)"),
+    ],
+    "Financial": [
+        ("EM Spreads (bps)",          "EM Spreads (10Y)",            "10Y Spread (bps)"),
+        ("LC 10Y Yield (%)",          "Local Currency 10Y Yield",    "10Y Yield (%)"),
+        ("NDF Implied Dep. 12M (%)",  "NDF Implied Depreciation (12M)", "NDF/Spot - 1 (%)"),
+    ],
+}
+
 # 4. Category grouping for the sidebar
 CATEGORY_GROUPS = {
     "Macro":             ["Inflation (CPI)", "Gross Domestic Product (GDP)", "Inflation Target Deviation"],
@@ -638,15 +686,20 @@ if view_mode == "🌍 Country View":
 
 # ── CROSS VARIABLE VIEW ───────────────────────────────────────────────────────
 if view_mode == "🔀 Cross Variable":
-    db_list = list(DATABASES.keys())
+    cv_cat_list = list(CV_VARIABLES.keys())
 
     st.sidebar.header("⚙️ Variables")
     st.sidebar.markdown("**Variable X (horizontal axis):**")
-    xdb  = st.sidebar.selectbox("xdb",  db_list, label_visibility="collapsed", key="cvx_db")
-    xmet = st.sidebar.selectbox("xmet", list(DATABASES[xdb]["metrics"].keys()), label_visibility="collapsed", key="cvx_met")
+    xcv_cat  = st.sidebar.selectbox("xcv_cat", cv_cat_list, label_visibility="collapsed", key="cvx_cat")
+    xcv_opts = {label: (db, met) for label, db, met in CV_VARIABLES[xcv_cat]}
+    xcv_label = st.sidebar.selectbox("xcv_met", list(xcv_opts.keys()), label_visibility="collapsed", key="cvx_met")
+    xdb, xmet = xcv_opts[xcv_label]
+
     st.sidebar.markdown("**Variable Y (vertical axis):**")
-    ydb  = st.sidebar.selectbox("ydb",  db_list, label_visibility="collapsed", key="cvy_db", index=min(1, len(db_list)-1))
-    ymet = st.sidebar.selectbox("ymet", list(DATABASES[ydb]["metrics"].keys()), label_visibility="collapsed", key="cvy_met")
+    ycv_cat  = st.sidebar.selectbox("ycv_cat", cv_cat_list, label_visibility="collapsed", key="cvy_cat", index=min(1, len(cv_cat_list)-1))
+    ycv_opts = {label: (db, met) for label, db, met in CV_VARIABLES[ycv_cat]}
+    ycv_label = st.sidebar.selectbox("ycv_met", list(ycv_opts.keys()), label_visibility="collapsed", key="cvy_met")
+    ydb, ymet = ycv_opts[ycv_label]
 
     st.sidebar.divider()
     st.sidebar.header("🌍 Countries")
@@ -681,8 +734,8 @@ if view_mode == "🔀 Cross Variable":
 
     cv_countries = st.sidebar.multiselect("Select countries:", options=common_countries, key=cv_sc_key)
 
-    x_label = f"{xdb} · {xmet}"
-    y_label = f"{ydb} · {ymet}"
+    x_label = f"{xcv_cat} · {xcv_label}"
+    y_label = f"{ycv_cat} · {ycv_label}"
     st.markdown("### Cross Variable")
     st.caption(f"X: {x_label}  ·  Y: {y_label}")
 
