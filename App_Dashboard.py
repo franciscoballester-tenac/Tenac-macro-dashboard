@@ -90,6 +90,7 @@ if USE_DROPBOX_API:
     ISO_PATH = "RESEARCH/Database/ISO_Master_Table.xlsx"
     MACRO_MONITOR_PATH = "RESEARCH/Main Monitors/Macro Monitors/Macro_Monitor_2.xlsx"
     LOGO_PATH = "RESEARCH/Database/Claude/Logo.png"
+    IT_POLITICS_PATH = "RESEARCH/Main Monitors/Macro Monitors/Decks/IT_Politics.xlsx"
 else:
     def get_base_path():
         home = os.path.expanduser("~")
@@ -105,6 +106,7 @@ else:
     ISO_PATH = os.path.join(DB_BASE_PATH, "ISO_Master_Table.xlsx")
     MACRO_MONITOR_PATH = os.path.join(DROPBOX_PATH, "RESEARCH", "Main Monitors", "Macro Monitors", "Macro_Monitor_2.xlsx")
     LOGO_PATH = os.path.join(DB_BASE_PATH, "Claude", "Logo.png")
+    IT_POLITICS_PATH = os.path.join(DROPBOX_PATH, "RESEARCH", "Main Monitors", "Macro Monitors", "Decks", "IT_Politics.xlsx")
 
 # 3. MASTER DICTIONARY
 DATABASES = {
@@ -235,12 +237,21 @@ DATABASES = {
         "metrics": {
             "10Y Spread (bps)": {"sheet": "data", "calc": None, "fmt": ".0f"}
         }
+    },
+    "Inflation Target Deviation": {
+        "file": "IMF/IMF_CPI_Global_iData.xlsx",
+        "iso_format": "ISO3",
+        "loader": "it_deviation",
+        "source": "IMF / Own calculation",
+        "metrics": {
+            "Deviation from IT Center (pp)": {"sheet": "YoY", "calc": None, "fmt": ".1f"}
+        }
     }
 }
 
 # 4. Category grouping for the sidebar
 CATEGORY_GROUPS = {
-    "Macro":             ["Inflation (CPI)", "Gross Domestic Product (GDP)"],
+    "Macro":             ["Inflation (CPI)", "Gross Domestic Product (GDP)", "Inflation Target Deviation"],
     "Fiscal":            ["Fiscal Monitor (FM)"],
     "External Sector":   ["Balance of Payments (BOP)", "International Reserves", "Energy Net Exports", "Commodity Terms of Trade"],
     "Monetary Policy":   ["Monetary Policy Rate"],
@@ -254,6 +265,7 @@ TENAC_COLORS = ["#6BBC88", "#3245B9", "#ED483F", "#4EA72E", "#A02B93", "#0E2841"
 COUNTRY_VIEW_METRICS = [
     ("Macro",    "GDP Growth YoY (%)",          "Gross Domestic Product (GDP)",   "GDP YoY (Year-over-Year)",                      ".1f"),
     ("Macro",    "Inflation YoY (%)",            "Inflation (CPI)",                "YoY",                                           ".1f"),
+    ("Macro",    "IT Deviation (pp)",            "Inflation Target Deviation",     "Deviation from IT Center (pp)",                 ".1f"),
     ("Fiscal",   "Primary Balance (% GDP)",      "Fiscal Monitor (FM)",            "Primary Balance (% of GDP)",                    ".1f"),
     ("Fiscal",   "Overall Balance (% GDP)",      "Fiscal Monitor (FM)",            "Overall Balance (% of GDP)",                    ".1f"),
     ("Fiscal",   "Gross Debt (% GDP)",           "Fiscal Monitor (FM)",            "Gross Debt (% of GDP)",                         ".1f"),
@@ -465,6 +477,40 @@ def load_em_spreads(route, iso_mapping):
         values.rename(columns=iso_mapping, inplace=True)
     return values
 
+@st.cache_data
+def load_it_targets(it_route):
+    """Returns DataFrame indexed by ISO3 with columns: Centro, Piso, Techo, Tipo (all in %)."""
+    df_it = pd.read_excel(get_file(it_route), sheet_name="IT")
+    df_it.columns = [str(c).strip() for c in df_it.columns]
+    # Use positional columns: 0=ISO3, 2=Centro, 3=Piso, 4=Techo, 5=Tipo
+    df_it = df_it.iloc[:, [0, 2, 3, 4, 5]].copy()
+    df_it.columns = ["ISO3", "Centro", "Piso", "Techo", "Tipo"]
+    df_it["ISO3"] = df_it["ISO3"].astype(str).str.strip()
+    df_it = df_it[df_it["ISO3"].notna() & (df_it["ISO3"] != "nan") & (df_it["ISO3"] != "")]
+    df_it = df_it.set_index("ISO3")
+    for col in ["Centro", "Piso", "Techo"]:
+        df_it[col] = pd.to_numeric(df_it[col], errors="coerce") * 100  # to %
+    return df_it
+
+@st.cache_data
+def load_it_deviation(cpi_route, it_route, iso3_mapping):
+    """Returns DataFrame of (CPI YoY - IT center) for all IT countries."""
+    df_targets = load_it_targets(it_route)
+    src_cpi = get_file(cpi_route)
+    _skip = _get_skiprows(src_cpi, "YoY")
+    df_cpi = pd.read_excel(src_cpi, sheet_name="YoY", index_col=0, skiprows=_skip)
+    df_cpi.index = pd.to_datetime(df_cpi.index)
+    df_cpi = df_cpi.sort_index()
+    df_cpi.columns = [str(c).strip() for c in df_cpi.columns]
+    if iso3_mapping:
+        df_cpi.rename(columns=iso3_mapping, inplace=True)
+    result = pd.DataFrame(index=df_cpi.index)
+    for iso3, row in df_targets.iterrows():
+        country_name = iso3_mapping.get(iso3)
+        if country_name and country_name in df_cpi.columns and pd.notna(row["Centro"]):
+            result[country_name] = df_cpi[country_name] - row["Centro"]
+    return result
+
 def load_df_for_metric(db_key, metric_key):
     db_cfg     = DATABASES[db_key]
     file_route = os.path.join(DB_BASE_PATH, db_cfg["file"]).replace("\\", "/")
@@ -485,6 +531,8 @@ def load_df_for_metric(db_key, metric_key):
             return df.rename(columns=iso_dicts[iso_format])
         if loader == "em_spreads":
             return load_em_spreads(file_route, iso_dicts[iso_format])
+        if loader == "it_deviation":
+            return load_it_deviation(file_route, IT_POLITICS_PATH, iso_dicts["ISO3"])
         if m_cfg["calc"] == "real_mpr":
             cpi_route = os.path.join(DB_BASE_PATH, "IMF/IMF_CPI_Global_iData.xlsx").replace("\\", "/")
             return load_real_mpr(file_route, cpi_route, iso_dicts["ISO2"], iso_dicts["ISO3"])
@@ -509,7 +557,7 @@ except Exception:
     pass
 
 st.sidebar.divider()
-view_mode = st.sidebar.radio("", ["📊 Variable View", "🌍 Country View", "🔀 Cross Variable"],
+view_mode = st.sidebar.radio("", ["📊 Variable View", "🌍 Country View", "🔀 Cross Variable", "🎯 IT Tracker"],
                              horizontal=True, label_visibility="collapsed")
 st.sidebar.divider()
 
@@ -792,6 +840,157 @@ if view_mode == "🔀 Cross Variable":
 
     st.stop()
 
+# ── IT TRACKER ────────────────────────────────────────────────────────────────
+if view_mode == "🎯 IT Tracker":
+    st.markdown("### 🎯 Inflation Target Tracker")
+    st.caption("Deviation of latest CPI YoY from the center of each country's inflation target")
+
+    def _hex_to_rgba(hex_color, alpha=0.15):
+        r, g, b = int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16)
+        return f"rgba({r},{g},{b},{alpha})"
+
+    try:
+        df_it_targets = load_it_targets(IT_POLITICS_PATH)
+        cpi_route_it = os.path.join(DB_BASE_PATH, "IMF/IMF_CPI_Global_iData.xlsx").replace("\\", "/")
+        df_it_dev = load_it_deviation(cpi_route_it, IT_POLITICS_PATH, iso_dicts["ISO3"])
+
+        src_cpi_it = get_file(cpi_route_it)
+        _skip_it = _get_skiprows(src_cpi_it, "YoY")
+        df_cpi_it = pd.read_excel(src_cpi_it, sheet_name="YoY", index_col=0, skiprows=_skip_it)
+        df_cpi_it.index = pd.to_datetime(df_cpi_it.index)
+        df_cpi_it = df_cpi_it.sort_index()
+        df_cpi_it.columns = [str(c).strip() for c in df_cpi_it.columns]
+        df_cpi_it.rename(columns=iso_dicts["ISO3"], inplace=True)
+    except Exception as e:
+        st.error(f"Error loading IT data: {e}")
+        st.stop()
+
+    tab_bar_dev, tab_band = st.tabs(["📊 Deviation Bar", "📈 vs Target Band"])
+
+    with tab_bar_dev:
+        rows_dev = []
+        for country in df_it_dev.columns:
+            series = df_it_dev[country].dropna()
+            if series.empty:
+                continue
+            iso3 = next((k for k, v in iso_dicts["ISO3"].items() if v == country), None)
+            if iso3 is None or iso3 not in df_it_targets.index:
+                continue
+            target = df_it_targets.loc[iso3]
+            last_dev = series.iloc[-1]
+            last_date = series.index[-1]
+            cpi_series = df_cpi_it[country].dropna() if country in df_cpi_it.columns else pd.Series(dtype=float)
+            cpi_val = cpi_series.iloc[-1] if not cpi_series.empty else None
+            if cpi_val is not None and pd.notna(target["Techo"]) and cpi_val > target["Techo"]:
+                status = "Above"
+            elif cpi_val is not None and pd.notna(target["Piso"]) and cpi_val < target["Piso"]:
+                status = "Below"
+            else:
+                status = "Within"
+            rows_dev.append({
+                "Country": country, "ISO3": iso3,
+                "CPI YoY": cpi_val, "Centro": target["Centro"],
+                "Piso": target["Piso"], "Techo": target["Techo"],
+                "Tipo": target["Tipo"], "Deviation": last_dev,
+                "Date": last_date.strftime("%b %Y"), "Status": status,
+            })
+
+        if not rows_dev:
+            st.warning("No IT deviation data available.")
+        else:
+            df_bar_it = pd.DataFrame(rows_dev).sort_values("Deviation", ascending=True)
+            colors_it = ["#ED483F" if s == "Above" else ("#3245B9" if s == "Below" else "#6BBC88")
+                         for s in df_bar_it["Status"]]
+            fig_dev = go.Figure(go.Bar(
+                x=df_bar_it["Deviation"],
+                y=df_bar_it["Country"],
+                orientation="h",
+                marker_color=colors_it,
+                customdata=df_bar_it[["CPI YoY", "Centro", "Piso", "Techo", "Date", "Tipo"]].values,
+                hovertemplate=(
+                    "<b>%{y}</b><br>"
+                    "Deviation: %{x:.1f} pp<br>"
+                    "CPI YoY: %{customdata[0]:.1f}%<br>"
+                    "Target: %{customdata[2]:.1f}%–%{customdata[3]:.1f}% (center %{customdata[1]:.1f}%)<br>"
+                    "Type: %{customdata[5]}<br>"
+                    "Date: %{customdata[4]}"
+                    "<extra></extra>"
+                )
+            ))
+            fig_dev.add_vline(x=0, line=dict(color="white", width=1.5, dash="dash"))
+            fig_dev.update_layout(
+                xaxis_title="Deviation from IT Center (pp)",
+                yaxis_title="",
+                height=max(400, len(df_bar_it) * 28),
+            )
+            fig_dev.update_xaxes(gridcolor="rgba(255,255,255,0.1)")
+            st.plotly_chart(fig_dev, use_container_width=True)
+            st.caption("🔴 Above ceiling · 🔵 Below floor · 🟢 Within band")
+
+    with tab_band:
+        it_countries_list = sorted(df_it_dev.columns.tolist(), key=str.casefold)
+        it_sc_key = "it_band_countries"
+        if it_sc_key in st.session_state:
+            st.session_state[it_sc_key] = [c for c in st.session_state[it_sc_key] if c in it_countries_list]
+        sel_it = st.multiselect("Select countries:", options=it_countries_list, key=it_sc_key)
+
+        if not sel_it:
+            st.warning("👈 Select at least one country.")
+        else:
+            df_cpi_sel = df_cpi_it[[c for c in sel_it if c in df_cpi_it.columns]].dropna(how="all")
+            if df_cpi_sel.empty:
+                st.warning("No CPI data available for selected countries.")
+            else:
+                min_d = df_cpi_sel.index.min().to_pydatetime()
+                max_d = df_cpi_sel.index.max().to_pydatetime()
+                default_start = max(min_d, (pd.Timestamp(max_d) - pd.DateOffset(years=5)).to_pydatetime())
+                dates_it = st.slider("📅 Time filter:", min_value=min_d, max_value=max_d,
+                                     value=(default_start, max_d), format="YYYY-MM", key="it_slider")
+                fig_band = go.Figure()
+                for i, country in enumerate(sel_it):
+                    iso3 = next((k for k, v in iso_dicts["ISO3"].items() if v == country), None)
+                    if iso3 is None or iso3 not in df_it_targets.index:
+                        continue
+                    target = df_it_targets.loc[iso3]
+                    color = TENAC_COLORS[i % len(TENAC_COLORS)]
+                    if country not in df_cpi_it.columns:
+                        continue
+                    s_cpi = df_cpi_it[country].dropna()
+                    s_cpi = s_cpi[s_cpi.index.between(dates_it[0], dates_it[1])]
+                    if s_cpi.empty:
+                        continue
+                    if pd.notna(target["Piso"]) and pd.notna(target["Techo"]):
+                        fig_band.add_trace(go.Scatter(
+                            x=s_cpi.index.tolist() + s_cpi.index.tolist()[::-1],
+                            y=[target["Techo"]] * len(s_cpi) + [target["Piso"]] * len(s_cpi),
+                            fill="toself",
+                            fillcolor=_hex_to_rgba(color, 0.15),
+                            line=dict(color="rgba(0,0,0,0)"),
+                            showlegend=False, hoverinfo="skip",
+                        ))
+                    if pd.notna(target["Centro"]):
+                        fig_band.add_trace(go.Scatter(
+                            x=s_cpi.index, y=[target["Centro"]] * len(s_cpi),
+                            mode="lines", line=dict(color=color, width=1, dash="dot"),
+                            showlegend=False, hoverinfo="skip",
+                        ))
+                    fig_band.add_trace(go.Scatter(
+                        x=s_cpi.index, y=s_cpi.values,
+                        mode="lines", name=country,
+                        line=dict(color=color, width=2),
+                        hovertemplate=f"{country} CPI YoY: %{{y:.1f}}%<extra></extra>",
+                    ))
+                fig_band.update_layout(
+                    xaxis_title="", yaxis_title="CPI YoY (%)",
+                    hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                )
+                fig_band.update_yaxes(gridcolor="rgba(255,255,255,0.1)")
+                st.plotly_chart(fig_band, use_container_width=True)
+                st.caption("Solid line = CPI YoY · Dotted line = IT center · Shaded area = target band")
+
+    st.stop()
+
 # ── VARIABLE VIEW ─────────────────────────────────────────────────────────────
 st.sidebar.header("⚙️ Data Controls")
 
@@ -819,6 +1018,8 @@ try:
         df = df.rename(columns=iso_dicts[iso_format])
     elif loader == "em_spreads":
         df = load_em_spreads(file_route, iso_dicts[iso_format])
+    elif loader == "it_deviation":
+        df = load_it_deviation(file_route, IT_POLITICS_PATH, iso_dicts["ISO3"])
     elif m_cfg["calc"] == "real_mpr":
         cpi_route = os.path.join(DB_BASE_PATH, "IMF/IMF_CPI_Global_iData.xlsx").replace("\\", "/")
         df = load_real_mpr(file_route, cpi_route, iso_dicts["ISO2"], iso_dicts["ISO3"])
