@@ -187,8 +187,9 @@ DATABASES = {
         "iso_format": "ISO2",
         "source": "BIS/Bloomberg",
         "metrics": {
-            "Policy Rate (%)": {"sheet": "Sheet1", "calc": None,       "fmt": ".2f"},
-            "Real MPR (%)":    {"sheet": "Sheet1", "calc": "real_mpr", "fmt": ".2f"}
+            "Policy Rate (%)":         {"sheet": "Sheet1", "calc": None,            "fmt": ".2f"},
+            "Real MPR (%)":            {"sheet": "Sheet1", "calc": "real_mpr",      "fmt": ".2f"},
+            "Real MPR vs 3m3m (%)":    {"sheet": "Sheet1", "calc": "real_mpr_3m3m", "fmt": ".2f"}
         }
     },
     "Real Effective Exchange Rate": {
@@ -246,16 +247,26 @@ DATABASES = {
         "metrics": {
             "Deviation from IT Center (pp)": {"sheet": "YoY", "calc": None, "fmt": ".1f"}
         }
+    },
+    "Inflation Target Deviation (3m3m)": {
+        "file": "IMF/IMF_CPI_Global_iData.xlsx",
+        "iso_format": "ISO3",
+        "loader": "it_deviation_3m3m",
+        "source": "IMF / Own calculation",
+        "metrics": {
+            "Deviation from IT Center 3m3m (pp)": {"sheet": "3m3m", "calc": None, "fmt": ".1f"}
+        }
     }
 }
 
 # Cross Variable: grouped variable menu
 CV_VARIABLES = {
     "Inflation": [
-        ("YoY",                   "Inflation (CPI)",            "YoY"),
-        ("3m3m saar",             "Inflation (CPI)",            "3m3m saar"),
-        ("MoM sa",                "Inflation (CPI)",            "MoM sa"),
-        ("Deviation from target", "Inflation Target Deviation", "Deviation from IT Center (pp)"),
+        ("YoY",                        "Inflation (CPI)",                    "YoY"),
+        ("3m3m saar",                  "Inflation (CPI)",                    "3m3m saar"),
+        ("MoM sa",                     "Inflation (CPI)",                    "MoM sa"),
+        ("Deviation from target",      "Inflation Target Deviation",         "Deviation from IT Center (pp)"),
+        ("Dev. from target (3m3m)",    "Inflation Target Deviation (3m3m)",  "Deviation from IT Center 3m3m (pp)"),
     ],
     "Growth": [
         ("YoY",      "Gross Domestic Product (GDP)", "GDP YoY (Year-over-Year)"),
@@ -281,8 +292,9 @@ CV_VARIABLES = {
         ("ToT Var YoY (%)",     "Commodity Terms of Trade", "Terms of Trade Var YoY (%)"),
     ],
     "Monetary Policy": [
-        ("Policy Rate (%)", "Monetary Policy Rate", "Policy Rate (%)"),
-        ("Real MPR (%)",    "Monetary Policy Rate", "Real MPR (%)"),
+        ("Policy Rate (%)",      "Monetary Policy Rate", "Policy Rate (%)"),
+        ("Real MPR (%)",         "Monetary Policy Rate", "Real MPR (%)"),
+        ("Real MPR vs 3m3m (%)", "Monetary Policy Rate", "Real MPR vs 3m3m (%)"),
     ],
     "Exchange Rates": [
         ("FX MoM (%)",         "FX",                          "FX Var MoM (%)"),
@@ -299,7 +311,7 @@ CV_VARIABLES = {
 
 # 4. Category grouping for the sidebar
 CATEGORY_GROUPS = {
-    "Macro":             ["Inflation (CPI)", "Gross Domestic Product (GDP)", "Inflation Target Deviation"],
+    "Macro":             ["Inflation (CPI)", "Gross Domestic Product (GDP)", "Inflation Target Deviation", "Inflation Target Deviation (3m3m)"],
     "Fiscal":            ["Fiscal Monitor (FM)"],
     "External Sector":   ["Balance of Payments (BOP)", "International Reserves", "Energy Net Exports", "Commodity Terms of Trade"],
     "Monetary Policy":   ["Monetary Policy Rate"],
@@ -450,7 +462,7 @@ def load_and_transform_data(route, sheet, iso_mapping, iso_format, calc_type=Non
     return df
 
 @st.cache_data
-def load_real_mpr(mpr_route, cpi_route, iso2_mapping, iso3_mapping):
+def load_real_mpr(mpr_route, cpi_route, iso2_mapping, iso3_mapping, cpi_sheet="YoY"):
     src_mpr = get_file(mpr_route)
     df_mpr = pd.read_excel(src_mpr, sheet_name="Sheet1", index_col=0,
                            skiprows=_get_skiprows(src_mpr, "Sheet1"))
@@ -466,8 +478,8 @@ def load_real_mpr(mpr_route, cpi_route, iso2_mapping, iso3_mapping):
         df_mpr.rename(columns=iso2_mapping, inplace=True)
 
     src_cpi = get_file(cpi_route)
-    df_cpi = pd.read_excel(src_cpi, sheet_name="YoY", index_col=0,
-                           skiprows=_get_skiprows(src_cpi, "YoY"))
+    df_cpi = pd.read_excel(src_cpi, sheet_name=cpi_sheet, index_col=0,
+                           skiprows=_get_skiprows(src_cpi, cpi_sheet))
     df_cpi.index = pd.to_datetime(df_cpi.index)
     df_cpi = df_cpi.sort_index()
     df_cpi.columns = [str(c).strip() for c in df_cpi.columns]
@@ -546,12 +558,12 @@ def load_it_targets(it_route):
     return df_it
 
 @st.cache_data(ttl=0)
-def load_it_deviation(cpi_route, it_route, iso3_mapping):
-    """Returns DataFrame of (CPI YoY - IT center) for all IT countries."""
+def load_it_deviation(cpi_route, it_route, iso3_mapping, cpi_sheet="YoY"):
+    """Returns DataFrame of (CPI - IT center) for all IT countries."""
     df_targets = load_it_targets(it_route)
     src_cpi = get_file(cpi_route)
-    _skip = _get_skiprows(src_cpi, "YoY")
-    df_cpi = pd.read_excel(src_cpi, sheet_name="YoY", index_col=0, skiprows=_skip)
+    _skip = _get_skiprows(src_cpi, cpi_sheet)
+    df_cpi = pd.read_excel(src_cpi, sheet_name=cpi_sheet, index_col=0, skiprows=_skip)
     df_cpi.index = pd.to_datetime(df_cpi.index)
     df_cpi = df_cpi.sort_index()
     df_cpi.columns = [str(c).strip() for c in df_cpi.columns]
@@ -586,9 +598,14 @@ def load_df_for_metric(db_key, metric_key):
             return load_em_spreads(file_route, iso_dicts[iso_format])
         if loader == "it_deviation":
             return load_it_deviation(file_route, IT_POLITICS_PATH, iso_dicts["ISO3"])
+        if loader == "it_deviation_3m3m":
+            return load_it_deviation(file_route, IT_POLITICS_PATH, iso_dicts["ISO3"], cpi_sheet="3m3m")
         if m_cfg["calc"] == "real_mpr":
             cpi_route = os.path.join(DB_BASE_PATH, "IMF/IMF_CPI_Global_iData.xlsx").replace("\\", "/")
             return load_real_mpr(file_route, cpi_route, iso_dicts["ISO2"], iso_dicts["ISO3"])
+        if m_cfg["calc"] == "real_mpr_3m3m":
+            cpi_route = os.path.join(DB_BASE_PATH, "IMF/IMF_CPI_Global_iData.xlsx").replace("\\", "/")
+            return load_real_mpr(file_route, cpi_route, iso_dicts["ISO2"], iso_dicts["ISO3"], cpi_sheet="3m3m")
         return load_and_transform_data(
             file_route, m_cfg["sheet"], iso_dicts[iso_format],
             iso_format, m_cfg.get("calc"), MACRO_MONITOR_PATH,
@@ -1078,9 +1095,14 @@ try:
         df = load_em_spreads(file_route, iso_dicts[iso_format])
     elif loader == "it_deviation":
         df = load_it_deviation(file_route, IT_POLITICS_PATH, iso_dicts["ISO3"])
+    elif loader == "it_deviation_3m3m":
+        df = load_it_deviation(file_route, IT_POLITICS_PATH, iso_dicts["ISO3"], cpi_sheet="3m3m")
     elif m_cfg["calc"] == "real_mpr":
         cpi_route = os.path.join(DB_BASE_PATH, "IMF/IMF_CPI_Global_iData.xlsx").replace("\\", "/")
         df = load_real_mpr(file_route, cpi_route, iso_dicts["ISO2"], iso_dicts["ISO3"])
+    elif m_cfg["calc"] == "real_mpr_3m3m":
+        cpi_route = os.path.join(DB_BASE_PATH, "IMF/IMF_CPI_Global_iData.xlsx").replace("\\", "/")
+        df = load_real_mpr(file_route, cpi_route, iso_dicts["ISO2"], iso_dicts["ISO3"], cpi_sheet="3m3m")
     else:
         df = load_and_transform_data(
             file_route, m_cfg["sheet"], iso_dicts[iso_format],
