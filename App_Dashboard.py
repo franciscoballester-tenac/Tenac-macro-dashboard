@@ -192,12 +192,12 @@ DATABASES = {
         }
     },
     "Real Effective Exchange Rate": {
-        "file": "BIS/BIS_REER_Broad.xlsx",
-        "iso_format": "ISO2",
-        "source": "BIS",
+        "file": "REER_Compilado_BIS_IMF.xlsx",
+        "iso_format": "ISO3",
+        "source": "BIS/IMF",
         "metrics": {
-            "REER Broad (10Y avg = 100)": {"sheet": 0, "calc": "reer_10y_avg", "fmt": ".1f", "change": "rel"},
-            "REER Var YoY (%)":           {"sheet": 0, "calc": "yoy_monthly",  "fmt": ".1f"}
+            "REER Broad (10Y avg = 100)": {"sheet": "REER", "calc": "reer_10y_avg", "fmt": ".1f", "change": "rel"},
+            "REER Var YoY (%)":           {"sheet": "YoY",  "calc": None,           "fmt": ".1f"}
         }
     },
     "FX": {
@@ -525,7 +525,7 @@ def load_em_spreads(route, iso_mapping):
         values.rename(columns=iso_mapping, inplace=True)
     return values
 
-@st.cache_data
+@st.cache_data(ttl=0)
 def load_it_targets(it_route):
     """Returns DataFrame indexed by ISO3 with columns: Centro, Piso, Techo, Tipo (all in %)."""
     df_it = pd.read_excel(get_file(it_route), sheet_name="IT")
@@ -540,7 +540,7 @@ def load_it_targets(it_route):
         df_it[col] = pd.to_numeric(df_it[col], errors="coerce") * 100  # to %
     return df_it
 
-@st.cache_data
+@st.cache_data(ttl=0)
 def load_it_deviation(cpi_route, it_route, iso3_mapping):
     """Returns DataFrame of (CPI YoY - IT center) for all IT countries."""
     df_targets = load_it_targets(it_route)
