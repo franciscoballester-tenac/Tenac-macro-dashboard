@@ -806,7 +806,7 @@ if view_mode == "🔀 Cross Variable":
                         name=name,
                         text=subset["country"],
                         textposition="top center",
-                        textfont=dict(size=9, color="white"),
+                        textfont=dict(size=11, color="white"),
                         marker=dict(size=9, color=color, opacity=opacity),
                         customdata=subset[["x_date", "y_date"]].values,
                         hovertemplate=(
