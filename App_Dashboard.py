@@ -1009,7 +1009,7 @@ if view_mode == "🎯 IT Tracker":
                     if country not in df_cpi_it.columns:
                         continue
                     s_cpi = df_cpi_it[country].dropna()
-                    s_cpi = s_cpi[s_cpi.index.between(dates_it[0], dates_it[1])]
+                    s_cpi = s_cpi.loc[dates_it[0]:dates_it[1]]
                     if s_cpi.empty:
                         continue
                     if pd.notna(target["Piso"]) and pd.notna(target["Techo"]):
