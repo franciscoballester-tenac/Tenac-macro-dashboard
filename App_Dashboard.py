@@ -1038,7 +1038,7 @@ if view_mode == "🎯 IT Tracker":
                     hovermode="x unified",
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 )
-                fig_band.update_yaxes(gridcolor="rgba(255,255,255,0.1)")
+                fig_band.update_yaxes(gridcolor="rgba(255,255,255,0.1)", rangemode="tozero")
                 st.plotly_chart(fig_band, use_container_width=True)
                 st.caption("Solid line = CPI YoY · Dotted line = IT center · Shaded area = target band")
 
