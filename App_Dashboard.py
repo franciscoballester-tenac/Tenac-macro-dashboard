@@ -311,8 +311,8 @@ CATEGORY_GROUPS = {
 TENAC_COLORS = ["#6BBC88", "#3245B9", "#ED483F", "#4EA72E", "#A02B93", "#0E2841", "#467886", "#96607D", "#E8E8E8", "#414042"]
 
 import plotly.io as pio                                                                                                              
-  pio.templates["tenac"] = go.layout.Template(layout=go.Layout(font=dict(size=14)))
-  pio.templates.default = "plotly_dark+tenac"
+pio.templates["tenac"] = go.layout.Template(layout=go.Layout(font=dict(size=14)))
+pio.templates.default = "plotly_dark+tenac"
 
 
 COUNTRY_VIEW_METRICS = [
