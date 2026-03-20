@@ -618,8 +618,58 @@ def load_df_for_metric(db_key, metric_key):
         return pd.DataFrame()
 
 
+@st.cache_data
+def load_tradeable_groups(bbg_route, em_spreads_route, iso2_map, iso3_map):
+    """Build data-driven country groups from BBG and EM Spreads datasets."""
+    def _map(codes, iso_map):
+        out = set()
+        for c in codes:
+            name = iso_map.get(str(c).strip())
+            if name and str(name) != "nan":
+                out.add(name)
+        return sorted(out, key=str.casefold)
+
+    groups = {}
+    try:
+        src = get_file(bbg_route)
+        hdr = pd.read_excel(src, sheet_name="Daily", header=None, nrows=6)
+        code_row = hdr.iloc[2]
+        ind_row  = hdr.iloc[4]
+        for ind, group_name in [
+            ("FX",    "Has FX Data"),
+            ("NDF",   "Has NDF Data"),
+            ("LC10y", "Has LC Yield"),
+        ]:
+            cols  = [j for j in range(1, len(ind_row)) if str(ind_row[j]).strip() == ind]
+            codes = [str(code_row[j]).strip() for j in cols]
+            groups[group_name] = _map(codes, iso3_map)
+    except Exception:
+        pass
+
+    try:
+        src = get_file(em_spreads_route)
+        hdr = pd.read_excel(src, sheet_name="data", header=None, nrows=4)
+        codes = [str(c).strip() for c in hdr.iloc[3, 1:].tolist()]
+        groups["Has EM Spread"] = _map(codes, iso2_map)
+    except Exception:
+        pass
+
+    if groups:
+        groups["Any Tradeable"] = sorted(
+            set().union(*groups.values()), key=str.casefold
+        )
+    return groups
+
+
 # 5. MAIN APP LOGIC
 iso_dicts = load_iso_mapping(ISO_PATH)
+
+try:
+    _bbg_r = os.path.join(DB_BASE_PATH, "BBG/BBG_withformulas.xlsm").replace("\\", "/")
+    _spr_r = os.path.join(DB_BASE_PATH, "BBG/em_spreads_10Y.xlsx").replace("\\", "/")
+    COUNTRY_GROUPS.update(load_tradeable_groups(_bbg_r, _spr_r, iso_dicts["ISO2"], iso_dicts["ISO3"]))
+except Exception:
+    pass
 
 try:
     if USE_DROPBOX_API:
