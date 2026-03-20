@@ -1208,16 +1208,56 @@ with tab_bar:
         last_values = last_values.dropna().sort_values(ascending=False)
         last_date = df_filtered.apply(lambda col: col.dropna().index[-1] if not col.dropna().empty else None)
         hover = [f"{last_date[c].strftime('%Y-%m')}" for c in last_values.index]
-        fig_bar = px.bar(
-            x=last_values.index, y=last_values.values,
-            labels={"x": "", "y": friendly_metric},
-            custom_data=[hover],
-            color_discrete_sequence=["#6BBC88"]
-        )
+
+        _hl_key = f"hl_bar_{selected_db}_{friendly_metric}"
+        _ls_key = f"ls_bar_{selected_db}_{friendly_metric}"
+        if _hl_key not in st.session_state:
+            st.session_state[_hl_key] = set()
+        if _ls_key not in st.session_state:
+            st.session_state[_ls_key] = frozenset()
+
+        _col_lbl, _col_clr = st.columns([3, 1])
+        _show_labels = _col_lbl.checkbox("Show value labels", value=False,
+                                         key=f"lbl_bar_{selected_db}_{friendly_metric}")
+        if _col_clr.button("🗑️ Clear marks", key=f"clr_bar_{selected_db}_{friendly_metric}"):
+            st.session_state[_hl_key] = set()
+            st.session_state[_ls_key] = None
+
+        _bar_colors = ["#F5A623" if c in st.session_state[_hl_key] else "#6BBC88"
+                       for c in last_values.index]
+        _text_vals = [f"{v:{val_fmt}}" for v in last_values.values] if _show_labels else None
+
+        fig_bar = go.Figure(go.Bar(
+            x=list(last_values.index),
+            y=list(last_values.values),
+            marker_color=_bar_colors,
+            customdata=[[h] for h in hover],
+            text=_text_vals,
+            textposition="outside" if _show_labels else None,
+            textfont=dict(size=11),
+        ))
         fig_bar.update_traces(hovertemplate=f"%{{x}}<br>%{{y:{val_fmt}}}<br>%{{customdata[0]}}<extra></extra>")
         fig_bar.update_layout(xaxis_title="", yaxis_title="")
         fig_bar.update_yaxes(gridcolor='rgba(255, 255, 255, 0.1)')
-        st.plotly_chart(fig_bar, use_container_width=True)
+        _ev_bar = st.plotly_chart(fig_bar, use_container_width=True, on_select="rerun",
+                                  key=f"bc_{selected_db}_{friendly_metric}")
+
+        try:
+            _pts = _ev_bar.selection.points or []
+        except (AttributeError, TypeError):
+            _pts = []
+        _cur_sel = frozenset(p.get("x") for p in _pts if p.get("x"))
+        _last_sel = st.session_state[_ls_key]
+        if _last_sel is None:
+            st.session_state[_ls_key] = _cur_sel
+        elif _cur_sel != _last_sel:
+            for _c in (_cur_sel - _last_sel):
+                if _c in st.session_state[_hl_key]:
+                    st.session_state[_hl_key].discard(_c)
+                else:
+                    st.session_state[_hl_key].add(_c)
+            st.session_state[_ls_key] = _cur_sel
+            st.rerun()
 
 with tab_change:
     if not selected_countries:
@@ -1263,14 +1303,60 @@ with tab_change:
                 colors = ["#6BBC88" if v >= 0 else "#ED483F" for v in s.values]
                 y_label = "% change" if change_type == "rel" else friendly_metric
 
-                fig_ch = px.bar(x=s.index, y=s.values, labels={"x": "", "y": y_label})
-                fig_ch.update_traces(marker_color=colors)
+                _hl_ch_key = f"hl_ch_{selected_db}_{friendly_metric}"
+                _ls_ch_key = f"ls_ch_{selected_db}_{friendly_metric}"
+                if _hl_ch_key not in st.session_state:
+                    st.session_state[_hl_ch_key] = set()
+                if _ls_ch_key not in st.session_state:
+                    st.session_state[_ls_ch_key] = frozenset()
+
+                _col_lbl_ch, _col_clr_ch = st.columns([3, 1])
+                _show_labels_ch = _col_lbl_ch.checkbox(
+                    "Show value labels", value=False,
+                    key=f"lbl_ch_{selected_db}_{friendly_metric}"
+                )
+                if _col_clr_ch.button("🗑️ Clear marks", key=f"clr_ch_{selected_db}_{friendly_metric}"):
+                    st.session_state[_hl_ch_key] = set()
+                    st.session_state[_ls_ch_key] = None
+
+                _final_colors_ch = [
+                    "#F5A623" if c in st.session_state[_hl_ch_key] else col
+                    for c, col in zip(s.index, colors)
+                ]
+                _text_ch = [f"{v:{val_fmt}}" for v in s.values] if _show_labels_ch else None
+
+                fig_ch = go.Figure(go.Bar(
+                    x=list(s.index),
+                    y=list(s.values),
+                    marker_color=_final_colors_ch,
+                    text=_text_ch,
+                    textposition="outside" if _show_labels_ch else None,
+                    textfont=dict(size=11),
+                ))
                 fig_ch.update_traces(hovertemplate=f"%{{x}}<br>%{{y:{val_fmt}}}<extra></extra>")
                 fig_ch.update_layout(xaxis_title="", yaxis_title=y_label)
                 fig_ch.update_yaxes(gridcolor="rgba(255,255,255,0.1)")
                 fig_ch.add_hline(y=0, line=dict(color="white", width=1.5, dash="dash"))
-                st.plotly_chart(fig_ch, use_container_width=True)
+                _ev_ch = st.plotly_chart(fig_ch, use_container_width=True, on_select="rerun",
+                                         key=f"cc_{selected_db}_{friendly_metric}")
                 st.caption(f"Change from {base_date.strftime('%d %b %Y')} to latest available value per country")
+
+                try:
+                    _pts_ch = _ev_ch.selection.points or []
+                except (AttributeError, TypeError):
+                    _pts_ch = []
+                _cur_sel_ch = frozenset(p.get("x") for p in _pts_ch if p.get("x"))
+                _last_sel_ch = st.session_state[_ls_ch_key]
+                if _last_sel_ch is None:
+                    st.session_state[_ls_ch_key] = _cur_sel_ch
+                elif _cur_sel_ch != _last_sel_ch:
+                    for _c in (_cur_sel_ch - _last_sel_ch):
+                        if _c in st.session_state[_hl_ch_key]:
+                            st.session_state[_hl_ch_key].discard(_c)
+                        else:
+                            st.session_state[_hl_ch_key].add(_c)
+                    st.session_state[_ls_ch_key] = _cur_sel_ch
+                    st.rerun()
 
 with tab_table:
     display_df = df_filtered if not df_filtered.empty else (df[selected_countries] if selected_countries else df)
