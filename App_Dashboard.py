@@ -91,6 +91,7 @@ if USE_DROPBOX_API:
     MACRO_MONITOR_PATH = "RESEARCH/Main Monitors/Macro Monitors/Macro_Monitor_2.xlsx"
     LOGO_PATH = "RESEARCH/Database/Claude/Logo.png"
     IT_POLITICS_PATH = "RESEARCH/Database/IT_Politics.xlsx"
+    FI_MONITOR_PATH  = "RESEARCH/Main Monitors/Pricing/Fixed Income Monitor.xlsx"
 else:
     def get_base_path():
         home = os.path.expanduser("~")
@@ -107,6 +108,7 @@ else:
     MACRO_MONITOR_PATH = os.path.join(DROPBOX_PATH, "RESEARCH", "Main Monitors", "Macro Monitors", "Macro_Monitor_2.xlsx")
     LOGO_PATH = os.path.join(DB_BASE_PATH, "Claude", "Logo.png")
     IT_POLITICS_PATH = os.path.join(DB_BASE_PATH, "IT_Politics.xlsx")
+    FI_MONITOR_PATH  = os.path.join(DROPBOX_PATH, "RESEARCH", "Main Monitors", "Pricing", "Fixed Income Monitor.xlsx")
 
 # 3. MASTER DICTIONARY
 DATABASES = {
@@ -387,7 +389,20 @@ GROUP_CATEGORIES = {
     "Geographic": ["Latam", "C. America & Carib.", "EM Europe", "Middle East",
                    "Africa", "EM Asia", "DM Europe", "DM Asia-Pac", "DM Americas"],
     "Tradeable":  ["Any Tradeable", "Has FX Data", "Has NDF Data", "Has LC Yield", "Has EM Spread"],
+    "Credit Rating": [],   # populated at runtime after loading FI Monitor
 }
+
+# S&P rating scale, best → worst quality
+RATING_ORDER = [
+    "AAA",
+    "AA+", "AA", "AA-",
+    "A+",  "A",  "A-",
+    "BBB+", "BBB", "BBB-",
+    "BB+",  "BB",  "BB-",
+    "B+",   "B",   "B-",
+    "CCC+", "CCC", "CCC-",
+    "CC", "C", "SD", "RD", "D",
+]
 
 def _resolve_group(group_name, iso3_map, available):
     """Map a COUNTRY_GROUPS key to a list of country names present in `available`."""
@@ -682,6 +697,28 @@ def load_tradeable_groups(bbg_route, em_spreads_route, iso2_map, iso3_map):
     return groups
 
 
+@st.cache_data
+def load_rating_groups(fi_route, iso3_map):
+    """Group ISO3 countries by S&P credit rating from Fixed Income Monitor."""
+    try:
+        src = get_file(fi_route)
+        df = pd.read_excel(src, sheet_name="10Y (hardcoded)", header=1, usecols=[0, 5])
+        df.columns = ["ISO3", "Rating"]
+        df = df[df["ISO3"].notna() & df["Rating"].notna()].copy()
+        df["ISO3"]   = df["ISO3"].astype(str).str.strip()
+        df["Rating"] = df["Rating"].astype(str).str.strip()
+        # Keep only valid 3-letter ISO3 codes (skip city-level entries like "AbuDh")
+        df = df[df["ISO3"].str.match(r"^[A-Z]{3}$")]
+        groups = {}
+        for rating, grp in df.groupby("Rating"):
+            codes = [c for c in grp["ISO3"].tolist() if c in iso3_map]
+            if codes:
+                groups[str(rating)] = codes
+        return groups
+    except Exception:
+        return {}
+
+
 # 5. MAIN APP LOGIC
 iso_dicts = load_iso_mapping(ISO_PATH)
 
@@ -689,6 +726,13 @@ try:
     _bbg_r = os.path.join(DB_BASE_PATH, "BBG/BBG_withformulas.xlsm").replace("\\", "/")
     _spr_r = os.path.join(DB_BASE_PATH, "BBG/em_spreads_10Y.xlsx").replace("\\", "/")
     COUNTRY_GROUPS.update(load_tradeable_groups(_bbg_r, _spr_r, iso_dicts["ISO2"], iso_dicts["ISO3"]))
+except Exception:
+    pass
+
+try:
+    _rating_groups = load_rating_groups(FI_MONITOR_PATH, iso_dicts["ISO3"])
+    COUNTRY_GROUPS.update(_rating_groups)
+    GROUP_CATEGORIES["Credit Rating"] = [r for r in RATING_ORDER if r in _rating_groups]
 except Exception:
     pass
 
@@ -814,7 +858,8 @@ if view_mode == "🔀 Cross Variable":
     if cv_sc_key in st.session_state:
         st.session_state[cv_sc_key] = [c for c in st.session_state[cv_sc_key] if c in common_countries]
 
-    _cv_grp_type = st.sidebar.radio("", list(GROUP_CATEGORIES.keys()), horizontal=True,
+    _avail_cats_cv = [k for k in GROUP_CATEGORIES if GROUP_CATEGORIES[k]]
+    _cv_grp_type = st.sidebar.radio("", _avail_cats_cv, horizontal=True,
                                     label_visibility="collapsed", key="cv_grp_type")
     _cv_grp_opts = ["—"] + [g for g in GROUP_CATEGORIES[_cv_grp_type] if g in COUNTRY_GROUPS]
     cv_group = st.sidebar.selectbox("", _cv_grp_opts, label_visibility="collapsed", key="cv_grp")
@@ -1202,7 +1247,8 @@ if sc_key in st.session_state:
     st.session_state[sc_key] = [c for c in st.session_state[sc_key] if c in available_countries]
 
 st.sidebar.markdown("**⚡ Quick select group:**")
-_grp_type = st.sidebar.radio("", list(GROUP_CATEGORIES.keys()), horizontal=True,
+_avail_cats = [k for k in GROUP_CATEGORIES if GROUP_CATEGORIES[k]]
+_grp_type = st.sidebar.radio("", _avail_cats, horizontal=True,
                               label_visibility="collapsed", key=f"grp_type_{selected_db}")
 _grp_opts = ["—"] + [g for g in GROUP_CATEGORIES[_grp_type] if g in COUNTRY_GROUPS]
 selected_group = st.sidebar.selectbox("", _grp_opts, label_visibility="collapsed", key=f"grp_{selected_db}")
