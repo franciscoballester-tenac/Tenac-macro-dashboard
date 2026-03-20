@@ -381,6 +381,27 @@ COUNTRY_GROUPS = {
     "DM Americas":  ["USA","CAN"],
 }
 
+# Group category taxonomy for the tiered selector
+GROUP_CATEGORIES = {
+    "Broad":      ["All", "EM", "DM"],
+    "Geographic": ["Latam", "C. America & Carib.", "EM Europe", "Middle East",
+                   "Africa", "EM Asia", "DM Europe", "DM Asia-Pac", "DM Americas"],
+    "Tradeable":  ["Any Tradeable", "Has FX Data", "Has NDF Data", "Has LC Yield", "Has EM Spread"],
+}
+
+def _resolve_group(group_name, iso3_map, available):
+    """Map a COUNTRY_GROUPS key to a list of country names present in `available`."""
+    if group_name == "All":
+        return list(available)
+    names = []
+    for code in COUNTRY_GROUPS.get(group_name, []):
+        mapped = iso3_map.get(code)        # geographic groups store ISO3 codes
+        if mapped and mapped in available:
+            names.append(mapped)
+        elif code in available:            # tradeable groups store country names directly
+            names.append(code)
+    return names
+
 # ─────────────────────────────────────────────
 # Helper: detecta cuántas filas de metadata saltar
 # ─────────────────────────────────────────────
@@ -793,14 +814,14 @@ if view_mode == "🔀 Cross Variable":
     if cv_sc_key in st.session_state:
         st.session_state[cv_sc_key] = [c for c in st.session_state[cv_sc_key] if c in common_countries]
 
-    cv_group = st.sidebar.selectbox("", ["—"] + list(COUNTRY_GROUPS.keys()), label_visibility="collapsed", key="cv_grp")
+    _cv_grp_type = st.sidebar.radio("", list(GROUP_CATEGORIES.keys()), horizontal=True,
+                                    label_visibility="collapsed", key="cv_grp_type")
+    _cv_grp_opts = ["—"] + [g for g in GROUP_CATEGORIES[_cv_grp_type] if g in COUNTRY_GROUPS]
+    cv_group = st.sidebar.selectbox("", _cv_grp_opts, label_visibility="collapsed", key="cv_grp")
     col_add, col_clear = st.sidebar.columns(2)
     if col_add.button("➕ Add", key="cv_add"):
         if cv_group != "—":
-            names_to_add = common_countries if cv_group == "All" else [
-                iso_dicts["ISO3"].get(code) for code in COUNTRY_GROUPS.get(cv_group, [])
-            ]
-            names_to_add = [n for n in names_to_add if n and n in common_countries]
+            names_to_add = _resolve_group(cv_group, iso_dicts["ISO3"], common_countries)
             st.session_state[cv_sc_key] = sorted(
                 set(st.session_state.get(cv_sc_key, [])) | set(names_to_add), key=str.casefold
             )
@@ -1181,15 +1202,14 @@ if sc_key in st.session_state:
     st.session_state[sc_key] = [c for c in st.session_state[sc_key] if c in available_countries]
 
 st.sidebar.markdown("**⚡ Quick select group:**")
-selected_group = st.sidebar.selectbox("", ["—"] + list(COUNTRY_GROUPS.keys()), label_visibility="collapsed", key=f"grp_{selected_db}")
+_grp_type = st.sidebar.radio("", list(GROUP_CATEGORIES.keys()), horizontal=True,
+                              label_visibility="collapsed", key=f"grp_type_{selected_db}")
+_grp_opts = ["—"] + [g for g in GROUP_CATEGORIES[_grp_type] if g in COUNTRY_GROUPS]
+selected_group = st.sidebar.selectbox("", _grp_opts, label_visibility="collapsed", key=f"grp_{selected_db}")
 col_add, col_clear = st.sidebar.columns(2)
 if col_add.button("➕ Add", key=f"add_{selected_db}"):
     if selected_group != "—":
-        if selected_group == "All":
-            names_to_add = available_countries
-        else:
-            group_names = [iso_dicts["ISO3"].get(code) for code in COUNTRY_GROUPS.get(selected_group, [])]
-            names_to_add = [n for n in group_names if n and n in available_countries]
+        names_to_add = _resolve_group(selected_group, iso_dicts["ISO3"], available_countries)
         current = list(st.session_state.get(sc_key, []))
         st.session_state[sc_key] = sorted(
             set(current) | set(names_to_add),
