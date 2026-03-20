@@ -1350,7 +1350,7 @@ with tab_bar:
             customdata=[[h] for h in hover],
             text=_text_vals,
             textposition="outside" if _show_labels else None,
-            textfont=dict(size=12),
+            textfont=dict(size=13),
         ))
         fig_bar.update_traces(hovertemplate=f"%{{x}}<br>%{{y:{val_fmt}}}<br>%{{customdata[0]}}<extra></extra>")
         fig_bar.update_layout(xaxis_title="", yaxis_title="")
@@ -1447,7 +1447,7 @@ with tab_change:
                     marker_color=_final_colors_ch,
                     text=_text_ch,
                     textposition="outside" if _show_labels_ch else None,
-                    textfont=dict(size=12),
+                    textfont=dict(size=13),
                 ))
                 fig_ch.update_traces(hovertemplate=f"%{{x}}<br>%{{y:{val_fmt}}}<extra></extra>")
                 fig_ch.update_layout(xaxis_title="", yaxis_title=y_label)
