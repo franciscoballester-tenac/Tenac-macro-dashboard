@@ -8,6 +8,7 @@ Created on Tue Mar 10 11:11:06 2026
 import streamlit as st
 import pandas as pd
 import os
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import dropbox
@@ -987,6 +988,62 @@ if view_mode == "🔀 Cross Variable":
                             "<extra></extra>"
                         )
                     ))
+                # ── Regression line ───────────────────────────────────────
+                col_reg, col_regtype = st.columns([1, 2])
+                show_reg  = col_reg.checkbox("Regression line", value=False, key="cv_show_reg")
+                reg_type  = col_regtype.selectbox("Type:", ["Linear", "Quadratic", "Exponential"],
+                                                   key="cv_reg_type", label_visibility="collapsed",
+                                                   disabled=not show_reg)
+
+                reg_caption = ""
+                if show_reg and len(sdf) >= 3:
+                    xs = sdf["x_val"].values.astype(float)
+                    ys = sdf["y_val"].values.astype(float)
+                    mask = np.isfinite(xs) & np.isfinite(ys)
+                    xs_c, ys_c = xs[mask], ys[mask]
+                    x_line = np.linspace(xs_c.min(), xs_c.max(), 200)
+
+                    try:
+                        if reg_type == "Linear":
+                            coeffs = np.polyfit(xs_c, ys_c, 1)
+                            y_line = np.polyval(coeffs, x_line)
+                            y_hat  = np.polyval(coeffs, xs_c)
+                            eq_str = f"y = {coeffs[0]:.3g}x + {coeffs[1]:.3g}"
+
+                        elif reg_type == "Quadratic":
+                            coeffs = np.polyfit(xs_c, ys_c, 2)
+                            y_line = np.polyval(coeffs, x_line)
+                            y_hat  = np.polyval(coeffs, xs_c)
+                            eq_str = f"y = {coeffs[0]:.3g}x² + {coeffs[1]:.3g}x + {coeffs[2]:.3g}"
+
+                        else:  # Exponential: fit log(y) = log(a) + b*x  (requires y > 0)
+                            pos = ys_c > 0
+                            if pos.sum() < 3:
+                                raise ValueError("Exponential requires y > 0 for all points")
+                            xs_e, ys_e = xs_c[pos], ys_c[pos]
+                            coeffs = np.polyfit(xs_e, np.log(ys_e), 1)
+                            a, b   = np.exp(coeffs[1]), coeffs[0]
+                            y_line = a * np.exp(b * x_line)
+                            y_hat  = a * np.exp(b * xs_e)
+                            xs_c, ys_c = xs_e, ys_e   # for R² with same subset
+                            eq_str = f"y = {a:.3g}·e^({b:.3g}x)"
+
+                        # R²
+                        ss_res = np.sum((ys_c - y_hat) ** 2)
+                        ss_tot = np.sum((ys_c - ys_c.mean()) ** 2)
+                        r2 = 1 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+
+                        fig_sc.add_trace(go.Scatter(
+                            x=x_line, y=y_line,
+                            mode="lines", name=f"{reg_type} fit",
+                            line=dict(color="#ED483F", width=2, dash="dot"),
+                            hoverinfo="skip",
+                        ))
+                        reg_caption = f"  ·  {reg_type} fit: {eq_str}  ·  R² = {r2:.3f}"
+
+                    except Exception as e:
+                        reg_caption = f"  ·  Regression error: {e}"
+
                 fig_sc.update_layout(xaxis_title=x_label, yaxis_title=y_label, hovermode="closest")
                 fig_sc.update_xaxes(gridcolor="rgba(255,255,255,0.1)", zeroline=True,
                                     zerolinecolor="rgba(255,255,255,0.35)", zerolinewidth=1)
@@ -995,7 +1052,8 @@ if view_mode == "🔀 Cross Variable":
                 st.plotly_chart(fig_sc, use_container_width=True)
                 n_stale = sdf["stale"].sum()
                 st.caption(f"{len(sdf)}/{len(cv_countries)} countries with data · "
-                           f"{n_stale} with data older than {tol_months} months (shown faded)")
+                           f"{n_stale} with data older than {tol_months} months (shown faded)"
+                           + reg_caption)
 
     with tab_dual:
         if not cv_countries:
