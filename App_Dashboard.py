@@ -834,12 +834,23 @@ if view_mode == "🔀 Cross Variable":
     xcv_opts = {label: (db, met) for label, db, met in CV_VARIABLES[xcv_cat]}
     xcv_label = st.sidebar.selectbox("xcv_met", list(xcv_opts.keys()), label_visibility="collapsed", key="cvx_met")
     xdb, xmet = xcv_opts[xcv_label]
+    _cv_transform_opts = ["Level", "Δ from date", "% Δ from date"]
+    x_transform = st.sidebar.selectbox("X transform:", _cv_transform_opts, key="cvx_transform", label_visibility="visible")
+    x_from_date = None
+    if x_transform != "Level":
+        x_from_date = st.sidebar.date_input("X: from date", key="cvx_from_date",
+                                             value=(pd.Timestamp.today() - pd.DateOffset(years=1)).date())
 
     st.sidebar.markdown("**Variable Y (vertical axis):**")
     ycv_cat  = st.sidebar.selectbox("ycv_cat", cv_cat_list, label_visibility="collapsed", key="cvy_cat", index=min(1, len(cv_cat_list)-1))
     ycv_opts = {label: (db, met) for label, db, met in CV_VARIABLES[ycv_cat]}
     ycv_label = st.sidebar.selectbox("ycv_met", list(ycv_opts.keys()), label_visibility="collapsed", key="cvy_met")
     ydb, ymet = ycv_opts[ycv_label]
+    y_transform = st.sidebar.selectbox("Y transform:", _cv_transform_opts, key="cvy_transform", label_visibility="visible")
+    y_from_date = None
+    if y_transform != "Level":
+        y_from_date = st.sidebar.date_input("Y: from date", key="cvy_from_date",
+                                             value=(pd.Timestamp.today() - pd.DateOffset(years=1)).date())
 
     st.sidebar.divider()
     st.sidebar.header("🌍 Countries")
@@ -875,8 +886,15 @@ if view_mode == "🔀 Cross Variable":
 
     cv_countries = st.sidebar.multiselect("Select countries:", options=common_countries, key=cv_sc_key)
 
-    x_label = f"{xcv_cat} · {xcv_label}"
-    y_label = f"{ycv_cat} · {ycv_label}"
+    def _transform_label(transform, from_date):
+        if transform == "Level":
+            return ""
+        date_str = pd.Timestamp(from_date).strftime("%b %Y")
+        prefix = "Δ" if transform == "Δ from date" else "% Δ"
+        return f" ({prefix} since {date_str})"
+
+    x_label = f"{xcv_cat} · {xcv_label}{_transform_label(x_transform, x_from_date)}"
+    y_label = f"{ycv_cat} · {ycv_label}{_transform_label(y_transform, y_from_date)}"
     st.markdown("### Cross Variable")
     st.caption(f"X: {x_label}  ·  Y: {y_label}")
 
@@ -901,17 +919,34 @@ if view_mode == "🔀 Cross Variable":
             tol_months = col_tol.selectbox("Stale data warning (months):", [6, 12, 24, 36], index=1, key="cv_tol")
             ref_ts = pd.Timestamp(ref_date)
 
+            def _get_cv_value(series, transform, from_date, ref_ts):
+                """Return (value, date_str) applying level / Δ / %Δ transform."""
+                w = series[series.index <= ref_ts]
+                if w.empty:
+                    return None, None
+                v_ref  = w.iloc[-1]
+                d_ref  = w.index[-1]
+                if transform == "Level":
+                    return v_ref, d_ref
+                from_ts = pd.Timestamp(from_date)
+                w_from = series[series.index <= from_ts]
+                if w_from.empty:
+                    return None, None
+                v_from = w_from.iloc[-1]
+                if transform == "Δ from date":
+                    return v_ref - v_from, d_ref
+                # "% Δ from date"
+                if v_from == 0 or pd.isna(v_from):
+                    return None, None
+                return (v_ref / v_from - 1) * 100, d_ref
+
             rows = []
             for country in cv_countries:
                 sx = df_x[country].dropna() if country in df_x.columns else pd.Series(dtype=float)
                 sy = df_y[country].dropna() if country in df_y.columns else pd.Series(dtype=float)
-                wx = sx[sx.index <= ref_ts]
-                wy = sy[sy.index <= ref_ts]
-                xv = wx.iloc[-1] if not wx.empty else None
-                yv = wy.iloc[-1] if not wy.empty else None
+                xv, xd = _get_cv_value(sx, x_transform, x_from_date, ref_ts)
+                yv, yd = _get_cv_value(sy, y_transform, y_from_date, ref_ts)
                 if xv is not None and yv is not None:
-                    xd = wx.index[-1]
-                    yd = wy.index[-1]
                     stale = ((ref_ts - xd).days > tol_months * 30 or
                              (ref_ts - yd).days > tol_months * 30)
                     rows.append({"country": country, "x_val": xv, "y_val": yv,
