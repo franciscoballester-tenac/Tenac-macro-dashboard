@@ -207,14 +207,14 @@ DATABASES = {
         }
     },
     "FX": {
-        "file": "BBG/BBG_withformulas.xlsm",
+        "file": "Yahoo/Yahoo_Prices.xlsx",
         "iso_format": "ISO3",
-        "loader": "bbg_fx",
-        "source": "Bloomberg",
+        "loader": "yahoo_fx",
+        "source": "Yahoo Finance",
         "metrics": {
-            "FX Spot (daily)":  {"sheet": "Daily", "calc": None,     "fmt": ".2f", "change": "rel"},
-            "FX Var MoM (%)":   {"sheet": "Daily", "calc": "fx_mom", "fmt": ".1f"},
-            "FX Var YoY (%)":   {"sheet": "Daily", "calc": "fx_yoy", "fmt": ".1f"}
+            "FX Spot (daily)":  {"sheet": "FX", "calc": None,     "fmt": ".2f", "change": "rel"},
+            "FX Var MoM (%)":   {"sheet": "FX", "calc": "fx_mom", "fmt": ".1f"},
+            "FX Var YoY (%)":   {"sheet": "FX", "calc": "fx_yoy", "fmt": ".1f"}
         }
     },
     "NDF Implied Depreciation (12M)": {
@@ -553,6 +553,21 @@ def load_bbg_indicator_raw(route, indicator):
     values = values[[c for c in values.columns if c.lower() != 'nan']]
     return values
 
+@st.cache_data
+def load_yahoo_fx_raw(route):
+    """Lee la hoja FX de Yahoo_Prices.xlsx.
+    Estructura: 6 filas de header (Description/Source/Unit/Frequency/SA/ISO3), datos desde fila 7."""
+    df_raw  = pd.read_excel(get_file(route), sheet_name="FX", header=None)
+    iso_row = df_raw.iloc[5]                          # fila 6 = ISO3
+    dates   = pd.to_datetime(df_raw.iloc[6:, 0], errors="coerce")
+    values  = df_raw.iloc[6:, 1:].copy()
+    values.columns = [str(iso_row.iloc[j]).strip() for j in range(1, len(iso_row))]
+    values.index   = dates
+    values = values.loc[values.index.notna()].sort_index()
+    values = values.apply(pd.to_numeric, errors="coerce")
+    values = values[[c for c in values.columns if c not in ("nan", "ISO3", "Description")]]
+    return values
+
 def transform_bbg_fx(df_raw, iso_mapping, calc_type):
     values = df_raw.copy()
     if calc_type in ('fx_mom', 'fx_yoy'):
@@ -624,13 +639,16 @@ def load_df_for_metric(db_key, metric_key):
     metric_loader = m_cfg.get("loader", loader)
 
     try:
+        if loader == "yahoo_fx":
+            return transform_bbg_fx(load_yahoo_fx_raw(file_route), iso_dicts[iso_format], m_cfg["calc"])
         if loader == "bbg_fx":
             return transform_bbg_fx(load_bbg_indicator_raw(file_route, "FX"), iso_dicts[iso_format], m_cfg["calc"])
         if loader == "bbg_lc10y":
             return load_bbg_indicator_raw(file_route, "LC10y").rename(columns=iso_dicts[iso_format])
         if loader == "bbg_ndf":
             df_ndf = load_bbg_indicator_raw(file_route, "NDF")
-            df_fx  = load_bbg_indicator_raw(file_route, "FX")
+            _yahoo_fx_path = os.path.join(DB_BASE_PATH, "Yahoo", "Yahoo_Prices.xlsx").replace("\\", "/")
+            df_fx  = load_yahoo_fx_raw(_yahoo_fx_path)
             common = [c for c in df_ndf.columns if c in df_fx.columns]
             df = ((df_ndf[common] / df_fx[common].reindex(df_ndf.index, method="ffill")) - 1) * 100
             return df.rename(columns=iso_dicts[iso_format])
@@ -668,12 +686,22 @@ def load_tradeable_groups(bbg_route, em_spreads_route, iso2_map, iso3_map):
 
     groups = {}
     try:
+        # "Has FX Data" — desde Yahoo FX (ISO3 en fila 6)
+        yahoo_path = os.path.join(DB_BASE_PATH, "Yahoo", "Yahoo_Prices.xlsx")
+        hdr_y   = pd.read_excel(yahoo_path, sheet_name="FX", header=None, nrows=6)
+        iso_row = hdr_y.iloc[5]
+        codes   = [str(iso_row.iloc[j]).strip() for j in range(1, len(iso_row))
+                   if str(iso_row.iloc[j]).strip() not in ("nan", "ISO3", "")]
+        groups["Has FX Data"] = _map(codes, iso3_map)
+    except Exception:
+        pass
+    try:
+        # NDF y LC Yield siguen en BBG
         src = get_file(bbg_route)
         hdr = pd.read_excel(src, sheet_name="Daily", header=None, nrows=6)
         code_row = hdr.iloc[2]
         ind_row  = hdr.iloc[4]
         for ind, group_name in [
-            ("FX",    "Has FX Data"),
             ("NDF",   "Has NDF Data"),
             ("LC10y", "Has LC Yield"),
         ]:
@@ -1293,13 +1321,16 @@ metric_loader = m_cfg.get("loader", loader)
 
 # --- Dispatch to the right loader ---
 try:
-    if loader == "bbg_fx":
+    if loader == "yahoo_fx":
+        df = transform_bbg_fx(load_yahoo_fx_raw(file_route), iso_dicts[iso_format], m_cfg["calc"])
+    elif loader == "bbg_fx":
         df = transform_bbg_fx(load_bbg_indicator_raw(file_route, "FX"), iso_dicts[iso_format], m_cfg["calc"])
     elif loader == "bbg_lc10y":
         df = load_bbg_indicator_raw(file_route, "LC10y").rename(columns=iso_dicts[iso_format])
     elif loader == "bbg_ndf":
         df_ndf = load_bbg_indicator_raw(file_route, "NDF")
-        df_fx  = load_bbg_indicator_raw(file_route, "FX")
+        _yahoo_fx_path = os.path.join(DB_BASE_PATH, "Yahoo", "Yahoo_Prices.xlsx").replace("\\", "/")
+        df_fx  = load_yahoo_fx_raw(_yahoo_fx_path)
         common = [c for c in df_ndf.columns if c in df_fx.columns]
         df_fx_aligned = df_fx[common].reindex(df_ndf.index, method='ffill')
         df = ((df_ndf[common] / df_fx_aligned) - 1) * 100
