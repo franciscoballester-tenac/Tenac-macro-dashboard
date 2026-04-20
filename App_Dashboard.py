@@ -217,6 +217,17 @@ DATABASES = {
             "FX Var YoY (%)":   {"sheet": "FX", "calc": "fx_yoy", "fmt": ".1f"}
         }
     },
+    "MSCI Country ETFs": {
+        "file": "Yahoo/Yahoo_Prices.xlsx",
+        "iso_format": "ISO3",
+        "loader": "yahoo_msci",
+        "source": "Yahoo Finance / iShares",
+        "metrics": {
+            "ETF Price (USD)":    {"sheet": "MSCI", "calc": None,     "fmt": ".2f", "change": "rel"},
+            "ETF Return MoM (%)": {"sheet": "MSCI", "calc": "fx_mom", "fmt": ".1f"},
+            "ETF Return YoY (%)": {"sheet": "MSCI", "calc": "fx_yoy", "fmt": ".1f"},
+        }
+    },
     "NDF Implied Depreciation (12M)": {
         "file": "BBG/BBG_withformulas.xlsm",
         "iso_format": "ISO3",
@@ -311,6 +322,8 @@ CV_VARIABLES = {
         ("EM Spreads (bps)",          "EM Spreads (10Y)",            "10Y Spread (bps)"),
         ("LC 10Y Yield (%)",          "Local Currency 10Y Yield",    "10Y Yield (%)"),
         ("NDF Implied Dep. 12M (%)",  "NDF Implied Depreciation (12M)", "NDF/Spot - 1 (%)"),
+        ("MSCI ETF Return MoM (%)",   "MSCI Country ETFs",           "ETF Return MoM (%)"),
+        ("MSCI ETF Return YoY (%)",   "MSCI Country ETFs",           "ETF Return YoY (%)"),
     ],
 }
 
@@ -321,7 +334,7 @@ CATEGORY_GROUPS = {
     "External Sector":   ["Balance of Payments (BOP)", "International Reserves", "Energy Net Exports", "Commodity Terms of Trade"],
     "Monetary Policy":   ["Monetary Policy Rate"],
     "Exchange Rates":    ["Real Effective Exchange Rate", "FX"],
-    "Financial Markets": ["NDF Implied Depreciation (12M)", "Local Currency 10Y Yield", "EM Spreads (10Y)"],
+    "Financial Markets": ["NDF Implied Depreciation (12M)", "Local Currency 10Y Yield", "EM Spreads (10Y)", "MSCI Country ETFs"],
 }
 
 # Tenac brand color sequence
@@ -389,7 +402,7 @@ GROUP_CATEGORIES = {
     "Broad":      ["All", "EM", "DM"],
     "Geographic": ["Latam", "C. America & Carib.", "EM Europe", "Middle East",
                    "Africa", "EM Asia", "DM Europe", "DM Asia-Pac", "DM Americas"],
-    "Tradeable":  ["Any Tradeable", "Has FX Data", "Has NDF Data", "Has LC Yield", "Has EM Spread"],
+    "Tradeable":  ["Any Tradeable", "Has FX Data", "Has MSCI Data", "Has NDF Data", "Has LC Yield", "Has EM Spread"],
     "Credit Rating": [],   # populated at runtime after loading FI Monitor
 }
 
@@ -568,6 +581,20 @@ def load_yahoo_fx_raw(route):
     values = values[[c for c in values.columns if c not in ("nan", "ISO3", "Description")]]
     return values
 
+@st.cache_data
+def load_yahoo_msci_raw(route):
+    """Lee la hoja MSCI de Yahoo_Prices.xlsx (misma estructura que FX: 6 filas header, ISO3 en fila 6)."""
+    df_raw  = pd.read_excel(get_file(route), sheet_name="MSCI", header=None)
+    iso_row = df_raw.iloc[5]
+    dates   = pd.to_datetime(df_raw.iloc[6:, 0], errors="coerce")
+    values  = df_raw.iloc[6:, 1:].copy()
+    values.columns = [str(iso_row.iloc[j]).strip() for j in range(1, len(iso_row))]
+    values.index   = dates
+    values = values.loc[values.index.notna()].sort_index()
+    values = values.apply(pd.to_numeric, errors="coerce")
+    values = values[[c for c in values.columns if c not in ("nan", "ISO3", "Description")]]
+    return values
+
 def transform_bbg_fx(df_raw, iso_mapping, calc_type):
     values = df_raw.copy()
     if calc_type in ('fx_mom', 'fx_yoy'):
@@ -641,6 +668,8 @@ def load_df_for_metric(db_key, metric_key):
     try:
         if loader == "yahoo_fx":
             return transform_bbg_fx(load_yahoo_fx_raw(file_route), iso_dicts[iso_format], m_cfg["calc"])
+        if loader == "yahoo_msci":
+            return transform_bbg_fx(load_yahoo_msci_raw(file_route), iso_dicts[iso_format], m_cfg["calc"])
         if loader == "bbg_fx":
             return transform_bbg_fx(load_bbg_indicator_raw(file_route, "FX"), iso_dicts[iso_format], m_cfg["calc"])
         if loader == "bbg_lc10y":
@@ -693,6 +722,12 @@ def load_tradeable_groups(bbg_route, em_spreads_route, iso2_map, iso3_map):
         codes   = [str(iso_row.iloc[j]).strip() for j in range(1, len(iso_row))
                    if str(iso_row.iloc[j]).strip() not in ("nan", "ISO3", "")]
         groups["Has FX Data"] = _map(codes, iso3_map)
+
+        hdr_m   = pd.read_excel(yahoo_path, sheet_name="MSCI", header=None, nrows=6)
+        iso_m   = hdr_m.iloc[5]
+        codes_m = [str(iso_m.iloc[j]).strip() for j in range(1, len(iso_m))
+                   if str(iso_m.iloc[j]).strip() not in ("nan", "ISO3", "")]
+        groups["Has MSCI Data"] = _map(codes_m, iso3_map)
     except Exception:
         pass
     try:
