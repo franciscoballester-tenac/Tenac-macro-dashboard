@@ -234,7 +234,7 @@ DATABASES = {
         "loader": "bbg_ndf",
         "source": "Bloomberg",
         "metrics": {
-            "NDF/Spot - 1 (%)": {"sheet": "Daily", "calc": None, "fmt": ".1f"}
+            "NDF/Spot - 1 (%)": {"sheet": "daily_val", "calc": None, "fmt": ".1f"}
         }
     },
     "Local Currency 10Y Yield": {
@@ -243,7 +243,7 @@ DATABASES = {
         "loader": "bbg_lc10y",
         "source": "Bloomberg",
         "metrics": {
-            "10Y Yield (%)": {"sheet": "Daily", "calc": None, "fmt": ".2f"}
+            "10Y Yield (%)": {"sheet": "daily_val", "calc": None, "fmt": ".2f"}
         }
     },
     "EM Spreads (10Y)": {
@@ -553,7 +553,7 @@ def load_real_mpr(mpr_route, cpi_route, iso2_mapping, iso3_mapping, cpi_sheet="Y
 
 @st.cache_data
 def load_bbg_indicator_raw(route, indicator):
-    df_raw = pd.read_excel(get_file(route), sheet_name='Daily', header=None)
+    df_raw = pd.read_excel(get_file(route), sheet_name='daily_val', header=None)
     code_row      = df_raw.iloc[2]
     indicator_row = df_raw.iloc[4]
     cols = [j for j in range(1, len(indicator_row)) if str(indicator_row[j]).strip() == indicator]
@@ -733,7 +733,7 @@ def load_tradeable_groups(bbg_route, em_spreads_route, iso2_map, iso3_map):
     try:
         # NDF y LC Yield siguen en BBG
         src = get_file(bbg_route)
-        hdr = pd.read_excel(src, sheet_name="Daily", header=None, nrows=6)
+        hdr = pd.read_excel(src, sheet_name="daily_val", header=None, nrows=6)
         code_row = hdr.iloc[2]
         ind_row  = hdr.iloc[4]
         for ind, group_name in [
