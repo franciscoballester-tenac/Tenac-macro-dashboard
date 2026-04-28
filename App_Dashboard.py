@@ -812,6 +812,9 @@ st.sidebar.divider()
 view_mode = st.sidebar.radio("", ["📊 Variable View", "🌍 Country View", "🔀 Cross Variable", "🎯 IT Tracker"],
                              horizontal=True, label_visibility="collapsed")
 st.sidebar.divider()
+if st.sidebar.button("🔄 Refresh Data"):
+    st.cache_data.clear()
+    st.rerun()
 
 # ── COUNTRY VIEW ──────────────────────────────────────────────────────────────
 if view_mode == "🌍 Country View":
