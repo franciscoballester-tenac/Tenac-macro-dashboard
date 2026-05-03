@@ -178,13 +178,23 @@ DATABASES = {
             "Natural Gas Net Exports (% of GDP)":  {"sheet": "Nat Gas Net Exp USD","calc": "annual_to_gdp", "fmt": ".1f"}
         }
     },
-    "Commodity Terms of Trade": {
+    "Commodity Terms of Trade (IMF)": {
         "file": "IMF/IMF_CTOT_Global_iData.xlsx",
         "iso_format": "ISO3",
         "source": "IMF",
         "metrics": {
             "Terms of Trade (10Y avg = 100)": {"sheet": "Terms_of_Trade", "calc": "reer_10y_avg", "fmt": ".1f", "change": "rel"},
             "Terms of Trade Var YoY (%)":     {"sheet": "Terms_of_Trade", "calc": "yoy_monthly",  "fmt": ".1f"}
+        }
+    },
+    "Commodity Terms of Trade (Citi)": {
+        "file": "Citi/TOT_citi.xlsm",
+        "iso_format": "ISO3",
+        "loader": "citi_tot",
+        "source": "Citi",
+        "metrics": {
+            "Commodity TOT (Level)":   {"sheet": "Data", "calc": None,          "fmt": ".1f"},
+            "Commodity TOT YoY (%)":   {"sheet": "Data", "calc": "yoy_monthly", "fmt": ".1f"}
         }
     },
     "Monetary Policy Rate": {
@@ -304,8 +314,10 @@ CV_VARIABLES = {
         ("Primary Balance (% GDP)", "Fiscal Monitor (FM)", "Primary Balance (% of GDP)"),
     ],
     "Terms of Trade": [
-        ("ToT (10Y avg = 100)", "Commodity Terms of Trade", "Terms of Trade (10Y avg = 100)"),
-        ("ToT Var YoY (%)",     "Commodity Terms of Trade", "Terms of Trade Var YoY (%)"),
+        ("ToT IMF (10Y avg = 100)", "Commodity Terms of Trade (IMF)", "Terms of Trade (10Y avg = 100)"),
+        ("ToT IMF Var YoY (%)",     "Commodity Terms of Trade (IMF)", "Terms of Trade Var YoY (%)"),
+        ("ToT Citi (Level)",        "Commodity Terms of Trade (Citi)", "Commodity TOT (Level)"),
+        ("ToT Citi YoY (%)",        "Commodity Terms of Trade (Citi)", "Commodity TOT YoY (%)"),
     ],
     "Monetary Policy": [
         ("Policy Rate (%)",      "Monetary Policy Rate", "Policy Rate (%)"),
@@ -331,7 +343,7 @@ CV_VARIABLES = {
 CATEGORY_GROUPS = {
     "Macro":             ["Inflation", "Gross Domestic Product (GDP)"],
     "Fiscal":            ["Fiscal Monitor (FM)"],
-    "External Sector":   ["Balance of Payments (BOP)", "International Reserves", "Energy Net Exports", "Commodity Terms of Trade"],
+    "External Sector":   ["Balance of Payments (BOP)", "International Reserves", "Energy Net Exports", "Commodity Terms of Trade (IMF)", "Commodity Terms of Trade (Citi)"],
     "Monetary Policy":   ["Monetary Policy Rate"],
     "Exchange Rates":    ["Real Effective Exchange Rate", "FX"],
     "Financial Markets": ["NDF Implied Depreciation (12M)", "Local Currency 10Y Yield", "EM Spreads (10Y)", "MSCI Country ETFs"],
@@ -356,7 +368,8 @@ COUNTRY_VIEW_METRICS = [
     ("External", "Net FDI (% GDP)",              "Balance of Payments (BOP)",      "Net FDI (% of GDP, 4Q rolling sum)",            ".1f"),
     ("External", "Reserves (% GDP)",             "International Reserves",         "Reserves (% of GDP)",                           ".1f"),
     ("External", "Energy Net Exports (% GDP)",   "Energy Net Exports",             "Total Energy Net Exports (% of GDP)",           ".1f"),
-    ("External", "Commodity ToT YoY (%)",        "Commodity Terms of Trade",       "Terms of Trade Var YoY (%)",                    ".1f"),
+    ("External", "Commodity ToT YoY (IMF)",      "Commodity Terms of Trade (IMF)", "Terms of Trade Var YoY (%)",                    ".1f"),
+    ("External", "Commodity ToT YoY (Citi)",     "Commodity Terms of Trade (Citi)", "Commodity TOT YoY (%)",                        ".1f"),
     ("Monetary", "Policy Rate (%)",              "Monetary Policy Rate",           "Policy Rate (%)",                               ".2f"),
     ("Monetary", "Real MPR (%)",                 "Monetary Policy Rate",           "Real MPR (%)",                                  ".2f"),
     ("FX",       "REER (10Y avg = 100)",         "Real Effective Exchange Rate",   "REER Broad (10Y avg = 100)",                    ".1f"),
@@ -609,6 +622,20 @@ def transform_bbg_fx(df_raw, iso_mapping, calc_type):
     return values
 
 @st.cache_data
+def load_citi_tot(route):
+    """Lee el archivo Citi TOT (sheet Data): fechas como índice, columnas ISO3."""
+    df = pd.read_excel(get_file(route), sheet_name="Data", index_col=0, parse_dates=True, engine="openpyxl")
+    df = df.sort_index()
+    df.columns = [str(c).strip() for c in df.columns]
+    df = df.apply(pd.to_numeric, errors="coerce")
+    try:
+        df = df.resample("ME").last()
+    except ValueError:
+        df = df.resample("M").last()
+    df.index = df.index.to_period("M").to_timestamp()
+    return df
+
+@st.cache_data
 def load_em_spreads(route, iso_mapping):
     df_raw = pd.read_excel(get_file(route), sheet_name='data', header=None)
     codes  = [str(c).strip() for c in df_raw.iloc[3, 1:].tolist()]
@@ -683,6 +710,13 @@ def load_df_for_metric(db_key, metric_key):
             return df.rename(columns=iso_dicts[iso_format])
         if loader == "em_spreads":
             return load_em_spreads(file_route, iso_dicts[iso_format])
+        if loader == "citi_tot":
+            df_citi = load_citi_tot(file_route)
+            if iso_dicts[iso_format]:
+                df_citi = df_citi.rename(columns=iso_dicts[iso_format])
+            if m_cfg["calc"] == "yoy_monthly":
+                return df_citi.pct_change(12) * 100
+            return df_citi
         if metric_loader == "it_deviation":
             return load_it_deviation(file_route, IT_POLITICS_PATH, iso_dicts["ISO3"])
         if metric_loader == "it_deviation_3m3m":
