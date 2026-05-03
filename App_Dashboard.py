@@ -624,16 +624,11 @@ def transform_bbg_fx(df_raw, iso_mapping, calc_type):
 
 @st.cache_data
 def load_citi_tot(route):
-    """Lee el archivo Citi TOT (sheet Data): fechas como índice, columnas ISO3."""
+    """Lee el archivo Citi TOT (sheet Data): fechas como índice, columnas ISO3. Devuelve datos diarios."""
     df = pd.read_excel(get_file(route), sheet_name="Data", index_col=0, parse_dates=True, engine="openpyxl")
     df = df.sort_index()
     df.columns = [str(c).strip() for c in df.columns]
     df = df.apply(pd.to_numeric, errors="coerce")
-    try:
-        df = df.resample("ME").last()
-    except ValueError:
-        df = df.resample("M").last()
-    df.index = df.index.to_period("M").to_timestamp()
     return df
 
 @st.cache_data
@@ -716,6 +711,11 @@ def load_df_for_metric(db_key, metric_key):
             if iso_dicts[iso_format]:
                 df_citi = df_citi.rename(columns=iso_dicts[iso_format])
             if m_cfg["calc"] == "yoy_monthly":
+                try:
+                    df_citi = df_citi.resample("ME").last()
+                except ValueError:
+                    df_citi = df_citi.resample("M").last()
+                df_citi.index = df_citi.index.to_period("M").to_timestamp()
                 return df_citi.pct_change(12) * 100
             return df_citi
         if metric_loader == "it_deviation":
