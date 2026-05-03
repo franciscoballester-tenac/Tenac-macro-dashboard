@@ -325,6 +325,7 @@ CV_VARIABLES = {
         ("Real MPR vs 3m3m (%)", "Monetary Policy Rate", "Real MPR vs 3m3m (%)"),
     ],
     "Exchange Rates": [
+        ("FX Spot (Level)",    "FX",                          "FX Spot (daily)"),
         ("FX MoM (%)",         "FX",                          "FX Var MoM (%)"),
         ("FX YoY (%)",         "FX",                          "FX Var YoY (%)"),
         ("REER (10Y avg=100)", "Real Effective Exchange Rate", "REER Broad (10Y avg = 100)"),
