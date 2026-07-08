@@ -535,7 +535,28 @@ def load_and_transform_data(route, sheet, iso_mapping, iso_format, calc_type=Non
                 year_cols = [c for c in df_gdp.columns if str(c).isdigit()]
                 df_gdp_years = df_gdp[year_cols].copy()
                 df_gdp_years.columns = df_gdp_years.columns.astype(int)
-                
+                df_gdp_years = df_gdp_years.apply(pd.to_numeric, errors="coerce")
+
+                # Normalizar unidades del GDP a USD absolutos. El Macro Monitor cambio
+                # en algun momento de USD a USD miles de millones; los numeradores
+                # (reservas, CA, FDI, energia) estan en USD absolutos, asi que
+                # detectamos la escala del GDP (ancla = USA) y lo llevamos a USD abs.
+                _anchor = None
+                if "USA" in df_gdp_years.index:
+                    _usa = df_gdp_years.loc["USA"]
+                    if isinstance(_usa, pd.DataFrame):
+                        _usa = _usa.iloc[0]
+                    _usa = _usa.dropna()
+                    if not _usa.empty:
+                        _anchor = float(_usa.max())
+                if _anchor is None:
+                    _anchor = float(df_gdp_years.abs().max().max())
+                if _anchor and _anchor < 1e6:        # USD miles de millones (USA ~ 4e4)
+                    df_gdp_years = df_gdp_years * 1e9
+                elif _anchor and _anchor < 1e9:      # USD millones (USA ~ 4e7)
+                    df_gdp_years = df_gdp_years * 1e6
+                # else: ya esta en USD absolutos -> no se escala
+
                 df_ratio = pd.DataFrame(index=df_target.index, columns=df_target.columns)
                 for year in df_target.index.year.unique():
                     if year in df_gdp_years.columns:
