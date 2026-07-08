@@ -265,6 +265,24 @@ DATABASES = {
             "10Y Spread (bps)": {"sheet": "data", "calc": None, "fmt": ".0f"}
         }
     },
+    "Sovereign CDS (5Y)": {
+        "file": "Citi/CDS.xlsx",
+        "iso_format": "ISO3",
+        "loader": "citi_cds",
+        "source": "Citi Velocity",
+        "metrics": {
+            "5Y CDS (bps)": {"sheet": "5Y", "calc": None, "fmt": ".0f"}
+        }
+    },
+    "EMBI (JPM)": {
+        "file": "EMBI/EMBI.xlsx",
+        "iso_format": "ISO3",
+        "loader": "embi",
+        "source": "JPMorgan / Bloomberg",
+        "metrics": {
+            "EMBI Spread (bps)": {"sheet": "Spreads", "calc": None, "fmt": ".0f"}
+        }
+    },
     "Inflation Target Deviation": {
         "file": "IMF/IMF_CPI_Global_iData.xlsx",
         "iso_format": "ISO3",
@@ -333,6 +351,8 @@ CV_VARIABLES = {
     ],
     "Financial": [
         ("EM Spreads (bps)",          "EM Spreads (10Y)",            "10Y Spread (bps)"),
+        ("Sovereign CDS 5Y (bps)",    "Sovereign CDS (5Y)",          "5Y CDS (bps)"),
+        ("EMBI Spread (bps)",         "EMBI (JPM)",                  "EMBI Spread (bps)"),
         ("LC 10Y Yield (%)",          "Local Currency 10Y Yield",    "10Y Yield (%)"),
         ("NDF Implied Dep. 12M (%)",  "NDF Implied Depreciation (12M)", "NDF/Spot - 1 (%)"),
         ("MSCI ETF Return MoM (%)",   "MSCI Country ETFs",           "ETF Return MoM (%)"),
@@ -347,7 +367,7 @@ CATEGORY_GROUPS = {
     "External Sector":   ["Balance of Payments (BOP)", "International Reserves", "Energy Net Exports", "Commodity Terms of Trade (IMF)", "Commodity Terms of Trade (Citi)"],
     "Monetary Policy":   ["Monetary Policy Rate"],
     "Exchange Rates":    ["Real Effective Exchange Rate", "FX"],
-    "Financial Markets": ["NDF Implied Depreciation (12M)", "Local Currency 10Y Yield", "EM Spreads (10Y)", "MSCI Country ETFs"],
+    "Financial Markets": ["NDF Implied Depreciation (12M)", "Local Currency 10Y Yield", "EM Spreads (10Y)", "Sovereign CDS (5Y)", "EMBI (JPM)", "MSCI Country ETFs"],
 }
 
 # Tenac brand color sequence
@@ -378,6 +398,8 @@ COUNTRY_VIEW_METRICS = [
     ("Financial","NDF Implied Dep. (%)",         "NDF Implied Depreciation (12M)", "NDF/Spot - 1 (%)",                              ".1f"),
     ("Financial","LC 10Y Yield (%)",             "Local Currency 10Y Yield",       "10Y Yield (%)",                                 ".2f"),
     ("Financial","EM Spread (bps)",              "EM Spreads (10Y)",               "10Y Spread (bps)",                              ".0f"),
+    ("Financial","Sovereign CDS 5Y (bps)",       "Sovereign CDS (5Y)",             "5Y CDS (bps)",                                  ".0f"),
+    ("Financial","EMBI Spread (bps)",            "EMBI (JPM)",                     "EMBI Spread (bps)",                             ".0f"),
 ]
 
 # 5. Country groups
@@ -632,6 +654,59 @@ def load_citi_tot(route):
     return df
 
 @st.cache_data
+def load_citi_cds(route, sheet="5Y"):
+    """Lee CDS.xlsx (Citi Velocity). Estructura: fila 1 = ISO3, fila 2 = codigo de
+    instrumento, datos desde fila 3 con la fecha en la col A (mas reciente arriba).
+    Devuelve datos diarios indexados por fecha, columnas = ISO3 (aun sin traducir)."""
+    df_raw = pd.read_excel(get_file(route), sheet_name=sheet, header=None)
+    iso_row  = df_raw.iloc[0]                 # fila 1 = ISO3
+    date_col = df_raw.iloc[2:, 0]             # fila 3+ = fechas
+    if pd.api.types.is_numeric_dtype(date_col):
+        dates = pd.to_datetime(date_col, unit="D", origin="1899-12-30", errors="coerce")
+    else:
+        dates = pd.to_datetime(date_col, errors="coerce")
+    values = df_raw.iloc[2:, 1:].copy()
+    values.columns = [str(iso_row.iloc[j]).strip() for j in range(1, len(iso_row))]
+    values.index = dates
+    values = values.loc[values.index.notna()].sort_index()
+    values = values.apply(pd.to_numeric, errors="coerce")
+    values = values[[c for c in values.columns if c not in ("nan", "ISO", "")]]
+    return values
+
+@st.cache_data
+def load_embi(route, sheet="Spreads"):
+    """Lee EMBI.xlsx (JPM/Bloomberg). Estructura: fila 1 = nombre de pais, fila 2 =
+    ticker Bloomberg, datos desde fila 3 con la fecha en la col A (ascendente).
+    Devuelve datos diarios indexados por fecha, columnas = nombre de pais (ya listo,
+    sin traducir ISO). Los agregados (HY, IG, EMBI) se descartan luego por no ser paises."""
+    df_raw = pd.read_excel(get_file(route), sheet_name=sheet, header=None)
+    name_row = df_raw.iloc[0]                  # fila 1 = nombres de pais
+    date_col = df_raw.iloc[2:, 0]             # fila 3+ = fechas
+    if pd.api.types.is_numeric_dtype(date_col):
+        dates = pd.to_datetime(date_col, unit="D", origin="1899-12-30", errors="coerce")
+    else:
+        dates = pd.to_datetime(date_col, errors="coerce")
+    _fix = {"Cote D'Ivoire": "Ivory Coast"}   # alinear grafia con ISO_Master_Table
+    values = df_raw.iloc[2:, 1:].copy()
+    values.columns = [_fix.get(str(name_row.iloc[j]).strip(), str(name_row.iloc[j]).strip())
+                      for j in range(1, len(name_row))]
+    values.index = dates
+    values = values.loc[values.index.notna()].sort_index()
+    values = values.apply(pd.to_numeric, errors="coerce")
+    # El archivo trae nombres duplicados = dos "vintages" (uno viejo que dejo de
+    # actualizarse, otro al dia). Nos quedamos con la columna cuya ultima fecha con
+    # dato es la mas reciente (robusto al orden de columnas).
+    if values.columns.duplicated().any():
+        best = {}
+        for i, col in enumerate(values.columns):
+            lv = values.iloc[:, i].last_valid_index()
+            if col not in best or (lv is not None and (best[col][1] is None or lv > best[col][1])):
+                best[col] = (i, lv)
+        values = values.iloc[:, sorted(pos for pos, _ in best.values())]
+    values = values[[c for c in values.columns if c not in ("nan", "")]]
+    return values
+
+@st.cache_data
 def load_em_spreads(route, iso_mapping):
     df_raw = pd.read_excel(get_file(route), sheet_name='data', header=None)
     codes  = [str(c).strip() for c in df_raw.iloc[3, 1:].tolist()]
@@ -706,6 +781,13 @@ def load_df_for_metric(db_key, metric_key):
             return df.rename(columns=iso_dicts[iso_format])
         if loader == "em_spreads":
             return load_em_spreads(file_route, iso_dicts[iso_format])
+        if loader == "citi_cds":
+            df_cds = load_citi_cds(file_route, m_cfg["sheet"])
+            if iso_dicts[iso_format]:
+                df_cds = df_cds.rename(columns=iso_dicts[iso_format])
+            return df_cds
+        if loader == "embi":
+            return load_embi(file_route, m_cfg["sheet"])
         if loader == "citi_tot":
             df_citi = load_citi_tot(file_route)
             if iso_dicts[iso_format]:
@@ -1410,6 +1492,12 @@ try:
         df = df.rename(columns=iso_dicts[iso_format])
     elif loader == "em_spreads":
         df = load_em_spreads(file_route, iso_dicts[iso_format])
+    elif loader == "citi_cds":
+        df = load_citi_cds(file_route, m_cfg["sheet"])
+        if iso_dicts[iso_format]:
+            df = df.rename(columns=iso_dicts[iso_format])
+    elif loader == "embi":
+        df = load_embi(file_route, m_cfg["sheet"])
     elif metric_loader == "it_deviation":
         df = load_it_deviation(file_route, IT_POLITICS_PATH, iso_dicts["ISO3"])
     elif metric_loader == "it_deviation_3m3m":
