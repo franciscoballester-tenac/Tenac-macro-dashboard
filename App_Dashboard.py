@@ -480,6 +480,28 @@ def _get_skiprows(source, sheet_name=0):
         source.seek(0)
     return next((i for i, v in enumerate(_peek.iloc[:, 0]) if str(v).strip().lower() not in _meta), 0)
 
+# ─────────────────────────────────────────────
+# Helper: formatea una fecha segun la frecuencia de la serie
+#   anual -> "2025" · trimestral -> "3Q-25" · mensual/diaria -> "Jul 2025"
+# La frecuencia se infiere del espaciado mediano entre fechas del indice.
+# ─────────────────────────────────────────────
+def _fmt_period(date, series_index=None):
+    date = pd.Timestamp(date)
+    med = None
+    if series_index is not None:
+        idx = pd.DatetimeIndex(pd.Series(series_index).dropna()).sort_values()
+        if len(idx) >= 3:
+            diffs = idx.to_series().diff().dropna().dt.days
+            if not diffs.empty:
+                med = diffs.median()
+    if med is not None and med >= 300:                 # anual
+        return str(date.year)
+    if med is not None and 60 <= med < 300:            # trimestral
+        return f"{(date.month - 1) // 3 + 1}Q-{str(date.year)[2:]}"
+    if date.month == 1 and date.day == 1:              # sin frecuencia clara: anual si es 1-ene
+        return str(date.year)
+    return date.strftime("%b %Y")                       # mensual / diaria
+
 # 5. Cached loading functions
 @st.cache_data
 def load_iso_mapping(iso_route):
@@ -997,9 +1019,7 @@ if view_mode == "🌍 Country View":
 
         last_val  = series.iloc[-1]
         last_date = series.index[-1]
-        date_str  = (str(last_date.year)
-                     if (last_date.month == 1 and last_date.day == 1)
-                     else last_date.strftime("%b %Y"))
+        date_str  = _fmt_period(last_date, series.index)
 
         col_metric.write(label)
         col_val.write(f"{last_val:{fmt}}")
@@ -1155,8 +1175,8 @@ if view_mode == "🔀 Cross Variable":
                     stale = ((ref_ts - xd).days > tol_months * 30 or
                              (ref_ts - yd).days > tol_months * 30)
                     rows.append({"country": country, "x_val": xv, "y_val": yv,
-                                 "x_date": xd.strftime("%b %Y"),
-                                 "y_date": yd.strftime("%b %Y"),
+                                 "x_date": _fmt_period(xd, sx.index),
+                                 "y_date": _fmt_period(yd, sy.index),
                                  "stale": stale})
 
             if not rows:
@@ -1629,7 +1649,7 @@ with tab_bar:
         last_values = df_filtered.apply(lambda col: col.dropna().iloc[-1] if not col.dropna().empty else None)
         last_values = last_values.dropna().sort_values(ascending=False)
         last_date = df_filtered.apply(lambda col: col.dropna().index[-1] if not col.dropna().empty else None)
-        hover = [f"{last_date[c].strftime('%Y-%m')}" for c in last_values.index]
+        hover = [_fmt_period(last_date[c], df_filtered[c].dropna().index) for c in last_values.index]
 
         _hl_key = f"hl_bar_{selected_db}_{friendly_metric}"
         _ls_key = f"ls_bar_{selected_db}_{friendly_metric}"
