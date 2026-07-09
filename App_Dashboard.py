@@ -723,8 +723,14 @@ def load_embi(route, sheet="Spreads"):
     Devuelve datos diarios indexados por fecha, columnas = nombre de pais (ya listo,
     sin traducir ISO). Los agregados (HY, IG, EMBI) se descartan luego por no ser paises."""
     df_raw = pd.read_excel(get_file(route), sheet_name=sheet, header=None)
-    name_row = df_raw.iloc[0]                  # fila 1 = nombres de pais
-    date_col = df_raw.iloc[2:, 0]             # fila 3+ = fechas
+    # Los nombres de pais estan en la fila inmediatamente arriba de la fila "Date".
+    # Robusto al layout viejo (nombres fila 1, Date fila 2) y al nuevo (ISO3 fila 1,
+    # nombres fila 2, Date fila 3) tras agregar la fila de ISO3.
+    _col_a = df_raw.iloc[:, 0].astype(str).str.strip().str.lower()
+    _date_hdr = _col_a[_col_a == "date"].index
+    _name_idx = (_date_hdr[0] - 1) if len(_date_hdr) else 0
+    name_row = df_raw.iloc[_name_idx]          # fila de nombres de pais
+    date_col = df_raw.iloc[2:, 0]             # fila 3+ = fechas (la fila "Date" cae como NaT y se filtra)
     if pd.api.types.is_numeric_dtype(date_col):
         dates = pd.to_datetime(date_col, unit="D", origin="1899-12-30", errors="coerce")
     else:
