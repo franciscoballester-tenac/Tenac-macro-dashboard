@@ -416,6 +416,10 @@ VALUATION_SPECS = [
      "ETF de pais en USD (iShares). Valor alto = equity caro."),
     ("EMBI Spread (bps)",    "EMBI (JPM)",                    "EMBI Spread (bps)", ".0f", "low",  False,
      "Spread soberano en bps. Spread ancho = credito barato."),
+    ("CDS 5Y (bps)",         "Sovereign CDS (5Y)",            "5Y CDS (bps)", ".0f", "low",  False,
+     "CDS soberano a 5 anios en bps. CDS ancho = proteccion cara = credito barato."),
+    ("LC 10Y Yield (%)",     "Local Currency 10Y Yield",      "10Y Yield (%)", ".2f", "low",  False,
+     "Tasa del bono local a 10 anios. Yield alto = precio del bono bajo = barato."),
 ]
 
 # 5. Country groups
@@ -1339,7 +1343,7 @@ if view_mode == "📐 Valuation":
         if st_ is None:
             tbl.append({"Indicator": r["label"], "Min": "—", "p1": "—", "p10": "—",
                         "Median": "—", "p90": "—", "p99": "—", "Max": "—", "Current": "—",
-                        "Pctile": "—", "Valuation": "—", "As of": "—", "n": "—"})
+                        "Pctile": "—", "Valuation": "—", "From": "—", "As of": "—", "n": "—"})
             continue
         val_pct = st_["pct"] if (r["direction"] == "high" or not val_orient) else 100 - st_["pct"]
         bname, _ = _val_bucket(val_pct)
@@ -1349,8 +1353,31 @@ if view_mode == "📐 Valuation":
                     "p90": format(st_["p90"], fmt), "p99": format(st_["p99"], fmt),
                     "Max": format(st_["max"], fmt), "Current": format(st_["last"], fmt),
                     "Pctile": f"{st_['pct']:.0f}", "Valuation": f"p{val_pct:.0f} · {bname}",
-                    "As of": _fmt_period(st_["last_date"]), "n": st_["n"]})
+                    # "From" = arranque real de la distribucion, que no siempre coincide
+                    # con la ventana pedida (hay series que empiezan mucho despues).
+                    # str() en n para que la columna no mezcle int con el "—" de las
+                    # filas sin datos: pyarrow no puede serializar eso y Streamlit avisa
+                    "From": _fmt_period(st_["start"]),
+                    "As of": _fmt_period(st_["last_date"]), "n": str(st_["n"])})
     st.dataframe(pd.DataFrame(tbl).set_index("Indicator"), use_container_width=True)
+
+    # Aviso cuando la historia efectiva es mucho mas corta que la ventana pedida: el
+    # LC10y de BBG, por ejemplo, arranca en 2024 para varios paises, asi que su
+    # "percentil de 10 anios" sale de dos anios de datos y no es comparable al resto.
+    _short = []
+    for r in rows:
+        st_ = r["stats"]
+        if st_ is None:
+            continue
+        _yrs = (st_["end"] - st_["start"]).days / 365.25
+        if _yrs < val_years * 0.6:
+            _short.append(f"**{r['label']}**: {_yrs:.1f} anios "
+                          f"(desde {_fmt_period(st_['start'])}, n={st_['n']})")
+    if _short:
+        st.caption("⚠️ Ojo: estos indicadores tienen menos historia que la ventana de "
+                   f"{val_years} anios pedida, asi que su percentil sale de una muestra "
+                   "mas corta y no es del todo comparable con el resto — "
+                   + " · ".join(_short))
 
     # Aviso para series nominales con drift estructural (alta inflacion): el percentil
     # del FX spot no dice nada de valuacion porque la serie es casi monotona.
