@@ -1151,6 +1151,13 @@ if view_mode == "📐 Valuation":
                f"{'mensual (fin de mes)' if val_monthly else 'diaria (dato crudo)'} · "
                f"cada barra esta escalada a su propio rango p1–p99, por eso los cuatro "
                f"indicadores son comparables aunque tengan unidades distintas. "
+               + ("**En las cuatro filas la derecha es caro**: el eje de FX y EMBI se "
+                  "invierte (valor alto = moneda debil / spread ancho = barato), asi que "
+                  "el marcador mas a la derecha es el activo mas caro. "
+                  if val_orient else
+                  "El eje es el valor crudo del indicador, asi que la direccion no es "
+                  "la misma en las cuatro filas (activa la orientacion de precio de "
+                  "activo para que la derecha sea caro en todas). ") +
                f"Un marcador mas alla de la punta del bigote = el actual esta fuera del "
                f"rango p1–p99; si aparece como triangulo (▶ ◀) esta tan afuera que hubo "
                f"que acotarlo para no romper la escala — el valor real igual se muestra.")
@@ -1199,11 +1206,20 @@ if view_mode == "📐 Valuation":
         val_pct = st_["pct"] if (r["direction"] == "high" or not val_orient) else 100 - st_["pct"]
         bname, bcol = _val_bucket(val_pct)
 
+        # En FX y EMBI el valor alto significa BARATO, asi que con la orientacion de
+        # precio de activo esas filas se dibujan con el eje invertido. De esa forma
+        # "a la derecha = caro" vale para los cuatro indicadores y alcanza con buscar
+        # el marcador mas a la derecha para ver que esta mas caro.
+        flip = val_orient and r["direction"] == "low"
+        _x = (lambda v: 100.0 - _n(v, lo, hi)) if flip else (lambda v: _n(v, lo, hi))
+        # con el eje invertido las puntas cambian de lado: a la izquierda queda p99
+        lo_lbl, hi_lbl = (hi, lo) if flip else (lo, hi)
+
         # Posicion real del actual y posicion dibujada (acotada a la banda de desborde).
         # Si hubo que acotarla, el marcador pasa a ser un triangulo apuntando hacia
         # afuera para avisar que el valor esta fuera de escala; el numero real igual se
         # muestra en el chip y en el hover.
-        _ncur = _n(st_["last"], lo, hi)
+        _ncur = _x(st_["last"])
         _ndraw = min(max(_ncur, -_OVER), 100 + _OVER)
         if _ncur > 100 + _OVER:
             cur_sym.append("triangle-right")
@@ -1213,9 +1229,9 @@ if view_mode == "📐 Valuation":
             cur_sym.append("diamond")
 
         wl_x += [0, 100, None];                       wl_y += [lab, lab, None]
-        bx_x += [_n(st_["p10"], lo, hi), _n(st_["p90"], lo, hi), None]
+        bx_x += [_x(st_["p10"]), _x(st_["p90"]), None]
         bx_y += [lab, lab, None]
-        med_x.append(_n(st_["med"], lo, hi));         med_y.append(lab)
+        med_x.append(_x(st_["med"]));                 med_y.append(lab)
         cap_x += [0, 100];                            cap_y += [lab, lab]
         cur_x.append(_ndraw);                         cur_y.append(lab)
         cur_c.append(bcol)
@@ -1232,9 +1248,9 @@ if view_mode == "📐 Valuation":
         # inline: asi nunca compiten horizontalmente con un marcador parado en la punta
         # o desbordado. Quedan tres bandas limpias: chip arriba, marcas en la linea,
         # extremos abajo.
-        annos.append(dict(x=0, y=lab, text=format(lo, fmt), showarrow=False, xanchor="center",
+        annos.append(dict(x=0, y=lab, text=format(lo_lbl, fmt), showarrow=False, xanchor="center",
                           yshift=-18, font=dict(color="#9A9A9A", size=11)))
-        annos.append(dict(x=100, y=lab, text=format(hi, fmt), showarrow=False, xanchor="center",
+        annos.append(dict(x=100, y=lab, text=format(hi_lbl, fmt), showarrow=False, xanchor="center",
                           yshift=-18, font=dict(color="#9A9A9A", size=11)))
         annos.append(dict(x=_ndraw, y=lab, text=f"<b>{format(st_['last'], fmt)}</b>",
                           showarrow=False, yshift=20, font=dict(color=bcol, size=13),
@@ -1250,6 +1266,17 @@ if view_mode == "📐 Valuation":
     for lab, txt, col in verdicts:
         annos.append(dict(x=x_verdict, y=lab, text=txt, showarrow=False,
                           xanchor="left", font=dict(color=col, size=12)))
+
+    # Leyenda de direccion: con la orientacion activada la derecha es caro en las cuatro
+    # filas; sin ella el eje es el valor crudo del indicador y la direccion no es unica.
+    annos.append(dict(
+        xref="paper", yref="paper", x=1, y=1.03, xanchor="right", yanchor="bottom",
+        showarrow=False, font=dict(size=12),
+        text=("<span style='color:#6BBC88'>◀ barato</span>"
+              "<span style='color:#9A9A9A'>&#160;&#160;·&#160;&#160;</span>"
+              "<span style='color:#ED483F'>caro ▶</span>")
+             if val_orient else
+             "<span style='color:#9A9A9A'>◀ valor bajo · valor alto ▶</span>"))
 
     fig_v.add_trace(go.Scatter(x=wl_x, y=wl_y, mode="lines", name="p1–p99",
                                line=dict(color="rgba(255,255,255,0.40)", width=2),
