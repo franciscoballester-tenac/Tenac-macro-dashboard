@@ -45,6 +45,15 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Raleway:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap');
 * { font-family: 'Raleway', sans-serif !important; }
 [data-testid="stSidebar"] { background-color: #3C3C3B !important; }
+/* Evita que las listas de los selectbox/multiselect se desborden de la pantalla:
+   se limitan a 45vh y hacen scroll interno. */
+div[data-baseweb="popover"] ul[role="listbox"],
+div[data-baseweb="popover"] ul[data-baseweb="menu"],
+ul[data-testid="stSelectboxVirtualDropdown"],
+div[data-baseweb="popover"] div[data-baseweb="menu"] {
+    max-height: 45vh !important;
+    overflow-y: auto !important;
+}
 </style>
 """, unsafe_allow_html=True)
 st.title("Tenac Macro Dashboard")
@@ -1123,16 +1132,6 @@ def _val_bucket(v):
 
 
 if view_mode == "📐 Valuation":
-    st.sidebar.header("⚙️ Settings")
-    val_years = st.sidebar.selectbox("Lookback (years):", [5, 10, 15, 20], index=1, key="val_yrs")
-    val_basis = st.sidebar.radio("Distribution basis:", ["Monthly", "Daily / raw"],
-                                 index=0, horizontal=True, key="val_basis")
-    val_orient = st.sidebar.checkbox("Asset-price orientation", value=True, key="val_orient",
-                                     help="Invierte FX y EMBI para que en todos los casos "
-                                          "'alto' signifique CARO. Si lo destildas, se muestra "
-                                          "el percentil crudo del indicador.")
-    val_monthly = (val_basis == "Monthly")
-
     # Cargar los cuatro indicadores (cacheados) y armar el universo de paises
     val_data, val_avail = {}, set()
     for label, db_key, metric_key, fmt, direction, trend_warn, note in VALUATION_SPECS:
@@ -1149,6 +1148,16 @@ if view_mode == "📐 Valuation":
     _val_default = val_countries.index("Brazil") if "Brazil" in val_countries else 0
     val_country = st.sidebar.selectbox("🌍 Select Country:", val_countries,
                                        index=_val_default, key="val_country")
+
+    st.sidebar.header("⚙️ Settings")
+    val_years = st.sidebar.selectbox("Lookback (years):", [5, 10, 15, 20], index=1, key="val_yrs")
+    val_basis = st.sidebar.radio("Distribution basis:", ["Monthly", "Daily / raw"],
+                                 index=0, horizontal=True, key="val_basis")
+    val_orient = st.sidebar.checkbox("Asset-price orientation", value=True, key="val_orient",
+                                     help="Invierte FX y EMBI para que en todos los casos "
+                                          "'alto' signifique CARO. Si lo destildas, se muestra "
+                                          "el percentil crudo del indicador.")
+    val_monthly = (val_basis == "Monthly")
 
     st.markdown(f"## {val_country} — Valuation vs own history")
     st.caption(f"Ventana: ultimos {val_years} anios · distribucion en base "
