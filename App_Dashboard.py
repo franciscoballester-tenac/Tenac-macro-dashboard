@@ -1092,7 +1092,12 @@ def _val_stats(series, years=10, monthly=True):
     La distribucion se arma en base mensual (ultimo dato de cada mes) para que las
     series diarias (FX, MSCI, EMBI) y las mensuales (REER) tengan un n comparable y
     el ruido diario no domine los percentiles. El "actual" es siempre la ultima
-    observacion cruda, asi no se pierde frescura por el resampleo."""
+    observacion cruda, asi no se pierde frescura por el resampleo.
+
+    Cuando la serie tiene menos de 24 meses la distribucion cae a la serie cruda
+    (con 11 puntos mensuales los cuantiles no significan nada), pero el `n_months`
+    que se reporta sigue siendo el conteo de meses: es lo unico comparable entre
+    filas. `n` queda como el tamanio real de la muestra usada para los cuantiles."""
     s = pd.to_numeric(series, errors="coerce").dropna()
     if s.empty:
         return None
@@ -1100,14 +1105,16 @@ def _val_stats(series, years=10, monthly=True):
     window = s.loc[s.index >= last_date - pd.DateOffset(years=years)]
     if window.empty:
         return None
+    # El conteo mensual se calcula siempre, incluso cuando la distribucion termina
+    # siendo diaria: es la medida de historia que se reporta y tiene que ser la misma
+    # unidad en todas las filas para poder compararlas.
+    try:
+        m = window.resample("ME").last().dropna()
+    except ValueError:
+        m = window.resample("M").last().dropna()
     dist = window
-    if monthly:
-        try:
-            m = window.resample("ME").last().dropna()
-        except ValueError:
-            m = window.resample("M").last().dropna()
-        if len(m) >= 24:              # con pocos puntos mensuales conviene la serie cruda
-            dist = m
+    if monthly and len(m) >= 24:      # con pocos puntos mensuales conviene la serie cruda
+        dist = m
     if len(dist) < 8:
         return None
     q = dist.quantile([0.01, 0.10, 0.50, 0.90, 0.99])
@@ -1117,7 +1124,9 @@ def _val_stats(series, years=10, monthly=True):
     return dict(min=lo, p01=float(q.loc[0.01]), p10=float(q.loc[0.10]),
                 med=float(q.loc[0.50]), p90=float(q.loc[0.90]),
                 p99=float(q.loc[0.99]), max=hi, last=last_val, pct=pct,
-                n=int(len(dist)), last_date=last_date,
+                n=int(len(dist)), n_months=int(len(m)),
+                basis=("monthly" if dist is m else "daily"),
+                last_date=last_date,
                 start=dist.index[0], end=dist.index[-1],
                 ratio=(hi / lo if lo > 0 else float("inf")))
 
@@ -1250,7 +1259,7 @@ if view_mode == "📐 Valuation":
         cur_c.append(bcol)
         cur_cd.append([format(st_["last"], fmt), format(st_["p01"], fmt), format(st_["p10"], fmt),
                        format(st_["med"], fmt), format(st_["p90"], fmt), format(st_["p99"], fmt),
-                       f"{st_['pct']:.0f}", f"{val_pct:.0f}", bname, st_["n"],
+                       f"{st_['pct']:.0f}", f"{val_pct:.0f}", bname, st_["n_months"],
                        _fmt_period(st_["last_date"]), format(st_["min"], fmt),
                        format(st_["max"], fmt)])
 
@@ -1317,7 +1326,7 @@ if view_mode == "📐 Valuation":
                        "min: %{customdata[11]}<br>"
                        "Percentil crudo: %{customdata[6]}<br>"
                        "<b>Valuacion: p%{customdata[7]} · %{customdata[8]}</b><br>"
-                       "n = %{customdata[9]} obs<extra></extra>")))
+                       "n = %{customdata[9]} meses<extra></extra>")))
 
     fig_v.update_layout(
         # 80px por fila: alcanza para el chip (+20) y la etiqueta de extremo (-18) sin
@@ -1352,7 +1361,8 @@ if view_mode == "📐 Valuation":
         if st_ is None:
             tbl.append({"Indicator": r["label"], "Min": "—", "p1": "—", "p10": "—",
                         "Median": "—", "p90": "—", "p99": "—", "Max": "—", "Current": "—",
-                        "Pctile": "—", "Valuation": "—", "From": "—", "As of": "—", "n": "—"})
+                        "Pctile": "—", "Valuation": "—", "From": "—", "As of": "—",
+                        "n (meses)": "—"})
             continue
         val_pct = st_["pct"] if (r["direction"] == "high" or not val_orient) else 100 - st_["pct"]
         bname, _ = _val_bucket(val_pct)
@@ -1365,9 +1375,13 @@ if view_mode == "📐 Valuation":
                     # "From" = arranque real de la distribucion, que no siempre coincide
                     # con la ventana pedida (hay series que empiezan mucho despues).
                     # str() en n para que la columna no mezcle int con el "—" de las
-                    # filas sin datos: pyarrow no puede serializar eso y Streamlit avisa
+                    # filas sin datos: pyarrow no puede serializar eso y Streamlit avisa.
+                    # n va en meses (no en tamanio de muestra) para que las filas sean
+                    # comparables: si fuera el tamanio de muestra, una serie de 10 meses
+                    # en base diaria mostraria 315 contra los 121 de una de 10 anios.
                     "From": _fmt_period(st_["start"]),
-                    "As of": _fmt_period(st_["last_date"]), "n": str(st_["n"])})
+                    "As of": _fmt_period(st_["last_date"]),
+                    "n (meses)": str(st_["n_months"])})
     st.dataframe(pd.DataFrame(tbl).set_index("Indicator"), use_container_width=True)
 
     # Aviso cuando la historia efectiva es mucho mas corta que la ventana pedida: el
@@ -1381,7 +1395,8 @@ if view_mode == "📐 Valuation":
         _yrs = (st_["end"] - st_["start"]).days / 365.25
         if _yrs < val_years * 0.6:
             _short.append(f"**{r['label']}**: {_yrs:.1f} anios "
-                          f"(desde {_fmt_period(st_['start'])}, n={st_['n']})")
+                          f"(desde {_fmt_period(st_['start'])}, "
+                          f"n={st_['n_months']} meses)")
     if _short:
         st.caption("⚠️ Ojo: estos indicadores tienen menos historia que la ventana de "
                    f"{val_years} anios pedida, asi que su percentil sale de una muestra "
