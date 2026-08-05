@@ -1,8 +1,22 @@
-streamlit
-pandas
-plotly
-openpyxl
-dropbox
-# starlette 1.4.0 agrego el kwarg obligatorio `thread_minimum_size` a GZipResponder,
-# que el gzip middleware de streamlit (<=1.61) no pasa -> HTTP 500 en todo request.
-starlette<1.4
+# Versiones fijadas al set verificado el 2026-08-05 (la nube corre Python 3.14).
+# Motivo: sin fijar, cada rebuild de Streamlit Cloud traia los ultimos majors y
+# podia romper la app sin ningun cambio de codigo. Fue exactamente lo que paso
+# con starlette 1.4.0 (ver abajo).
+#
+# Para actualizar: subi una version a la vez, pusheá y comproba que la app
+# levante antes de seguir con la siguiente.
+
+streamlit==1.61.0
+pandas==3.0.5
+numpy==2.5.1
+plotly==6.9.0
+openpyxl==3.1.5
+dropbox==12.2.1
+
+# Dependencia transitiva de streamlit, fijada a proposito:
+# starlette 1.4.0 agrego el kwarg obligatorio `thread_minimum_size` a
+# GZipResponder.__init__, que el gzip middleware de streamlit (<=1.61) no pasa.
+# Resultado: HTTP 500 en todo request que acepta gzip -> "Oh no. Error running app.".
+# streamlit declara starlette<2,>=0.46.0, demasiado laxo para frenarlo.
+# No subir hasta que streamlit publique el fix.
+starlette==1.3.1
