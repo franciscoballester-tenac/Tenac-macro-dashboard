@@ -18,9 +18,12 @@ from dropbox.common import PathRoot
 # --- SISTEMA DE CONTRASEÑA ---
 def check_password():
     def password_entered():
-        if st.session_state["password"] == "0220": # <-- CAMBIÁ ESTA CLAVE POR LA QUE QUIERAS
+        # Se usa .get() y no [] a proposito: si la app se reinicia con la pestaña
+        # abierta, el browser puede mandar este callback a un proceso nuevo donde
+        # el widget "password" todavia no existe, y con [] eso tiraba KeyError.
+        if st.session_state.get("password", "") == "0220": # <-- CAMBIÁ ESTA CLAVE POR LA QUE QUIERAS
             st.session_state["password_correct"] = True
-            del st.session_state["password"] 
+            st.session_state.pop("password", None)
         else:
             st.session_state["password_correct"] = False
 
