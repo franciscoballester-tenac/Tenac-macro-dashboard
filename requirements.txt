@@ -3,3 +3,6 @@ pandas
 plotly
 openpyxl
 dropbox
+# starlette 1.4.0 agrego el kwarg obligatorio `thread_minimum_size` a GZipResponder,
+# que el gzip middleware de streamlit (<=1.61) no pasa -> HTTP 500 en todo request.
+starlette<1.4
