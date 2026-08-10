@@ -426,6 +426,14 @@ COUNTRY_VIEW_METRICS = [
 #   bench_col   -> columna del MISMO DataFrame que hace de benchmark (el EMBI global
 #                  viene como una columna mas en EMBI.xlsx)
 #   bench_yahoo -> codigo de la hoja MSCI_Agg de Yahoo_Prices (EM, ACWI, LATAM, ...)
+#   bench_op    -> "ratio" (default) o "diff". Para spreads conviene tener las dos:
+#                  la DIFERENCIA es lo tradeable (el P&L de estar largo el pais contra
+#                  short el indice) pero su escala depende del nivel del indice, asi que
+#                  su percentil se contamina. En Chile corr(diff, EMBI global) = -0.93 y
+#                  la diferencia marca "el mas barato en 10 anios" cuando en realidad
+#                  esta en su maximo solo porque el indice esta en minimos; el RATIO,
+#                  con corr -0.13, dice correctamente que no cambio nada. El ratio es
+#                  el que hay que leer para valuacion; la diferencia, para tradear.
 VALUATION_SPECS = [
     dict(label="FX Spot (LC/USD)", db="FX", metric="FX Spot (daily)",
          fmt=".4g", direction="low", trend_warn=True,
@@ -443,11 +451,19 @@ VALUATION_SPECS = [
     dict(label="EMBI Spread (bps)", db="EMBI (JPM)", metric="EMBI Spread (bps)",
          fmt=".0f", direction="low", trend_warn=False,
          note="Spread soberano en bps. Spread ancho = credito barato."),
+    dict(label="EMBI − Global (bps)", db="EMBI (JPM)", metric="EMBI Spread (bps)",
+         fmt="+.0f", direction="low", trend_warn=False, bench_col="EMBI", bench_op="diff",
+         note="Spread del pais MENOS el EMBI global, en bps. Es la cantidad tradeable: el "
+              "P&L de estar largo el pais contra short el indice. Negativo = el pais cotiza "
+              "por dentro del indice. Ojo que su escala depende del nivel del indice, asi "
+              "que en creditos muy apretados (Chile, Peru) el percentil se contamina — para "
+              "valuacion leer el ratio."),
     dict(label="EMBI vs Global (x)", db="EMBI (JPM)", metric="EMBI Spread (bps)",
          fmt=".2f", direction="low", trend_warn=False, bench_col="EMBI",
          note="Spread del pais dividido el EMBI global. Ratio alto = el pais paga mas "
-              "que el indice = credito barato en terminos relativos. Se usa el ratio y no "
-              "la diferencia en bps porque los spreads se mueven de forma multiplicativa."),
+              "que el indice = credito barato en terminos relativos. A diferencia de la "
+              "resta, no depende del nivel del indice, asi que su percentil contra la "
+              "historia es el que hay que mirar para valuacion relativa."),
     dict(label="CDS 5Y (bps)", db="Sovereign CDS (5Y)", metric="5Y CDS (bps)",
          fmt=".0f", direction="low", trend_warn=False,
          note="CDS soberano a 5 anios en bps. CDS ancho = proteccion cara = credito barato."),
@@ -1195,7 +1211,10 @@ def _val_series(spec, df_v, country, bench_df=None):
     if bench is not None:
         if isinstance(bench, pd.DataFrame):
             bench = bench.iloc[:, 0]
-        s = s / bench.replace(0, np.nan)
+        if spec.get("bench_op") == "diff":
+            s = s - bench
+        else:
+            s = s / bench.replace(0, np.nan)
     return s.dropna()
 
 
