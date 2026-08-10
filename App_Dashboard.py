@@ -1191,10 +1191,16 @@ def _val_stats(series, years=10, monthly=True):
 
 
 def _val_series(spec, df_v, country, bench_df=None):
-    """Serie a evaluar para una fila: el nivel del indicador, o su ratio contra un
-    benchmark si la fila es relativa. Devuelve None si falta el pais o el benchmark."""
+    """Serie a evaluar para una fila: el nivel del indicador, o su ratio/diferencia
+    contra un benchmark si la fila es relativa.
+
+    Devuelve (serie, motivo). `motivo` es None si salio bien, o un texto explicando que
+    falto. Importa distinguir "el pais no tiene el indicador" de "falta el benchmark":
+    si no, las dos se ven igual en el grafico y no hay forma de saber si el problema es
+    de cobertura del pais o de la serie de referencia (que suele ser un dato viejo en
+    cache tras agregar la columna al archivo)."""
     if df_v is None or df_v.empty or country not in df_v.columns:
-        return None
+        return None, "sin datos del pais"
     s = pd.to_numeric(df_v[country], errors="coerce")
     if isinstance(s, pd.DataFrame):          # columnas duplicadas: tomar la primera
         s = s.iloc[:, 0]
@@ -1202,11 +1208,11 @@ def _val_series(spec, df_v, country, bench_df=None):
     bench = None
     if spec.get("bench_col"):
         if spec["bench_col"] not in df_v.columns:
-            return None
+            return None, f"falta el benchmark: {spec['bench_col']} (proba 🔄 Refresh Data)"
         bench = pd.to_numeric(df_v[spec["bench_col"]], errors="coerce")
     elif spec.get("bench_yahoo"):
         if bench_df is None or spec["bench_yahoo"] not in bench_df.columns:
-            return None
+            return None, f"falta el benchmark: {spec['bench_yahoo']} (proba 🔄 Refresh Data)"
         # el benchmark viene de otra hoja: alinear al indice del pais con ffill
         bench = pd.to_numeric(bench_df[spec["bench_yahoo"]], errors="coerce")
         bench = bench.reindex(s.index.union(bench.index)).ffill().reindex(s.index)
@@ -1219,7 +1225,11 @@ def _val_series(spec, df_v, country, bench_df=None):
         else:
             s = s / bench.replace(0, np.nan)
         s = s * spec.get("bench_scale", 1)     # 100 para pasar de p.p. a bps
-    return s.dropna()
+    s = s.dropna()
+    if s.empty:
+        # el pais y el benchmark existen pero no se solapan en ninguna fecha
+        return None, "sin solape con el benchmark"
+    return s, None
 
 
 def _val_bucket(v):
@@ -1259,8 +1269,8 @@ def _val_figure(rows, orient):
         lab, st_, fmt = r["label"], r["stats"], r["fmt"]
         if st_ is None:
             y_labels.append(lab)
-            annos.append(dict(x=50, y=lab, text="sin datos suficientes", showarrow=False,
-                              font=dict(color="#888", size=12)))
+            annos.append(dict(x=50, y=lab, text=r.get("missing") or "sin datos suficientes",
+                              showarrow=False, font=dict(color="#888", size=12)))
             continue
         y_labels.append(lab)
         # La escala de cada fila va de p1 a p99, no de min a max: asi un tick corrupto
@@ -1476,13 +1486,14 @@ if view_mode == "📐 Valuation":
 
     rows = []
     for spec in VALUATION_SPECS:
-        s = _val_series(spec, val_data.get(spec["label"]), val_country, val_bench)
+        s, _why = _val_series(spec, val_data.get(spec["label"]), val_country, val_bench)
+        _stats = None if s is None else _val_stats(s, val_years, val_monthly)
+        if s is not None and _stats is None:
+            _why = f"muy pocos datos en la ventana de {val_years} anios"
         rows.append(dict(label=spec["label"], fmt=spec["fmt"], direction=spec["direction"],
                          trend_warn=spec["trend_warn"], note=spec["note"],
                          rel=bool(spec.get("bench_col") or spec.get("bench_yahoo")),
-                         series=s,
-                         stats=None if s is None or s.empty
-                               else _val_stats(s, val_years, val_monthly)))
+                         series=s, missing=_why, stats=_stats))
 
     if all(r["stats"] is None for r in rows):
         st.warning(f"No hay datos suficientes para {val_country} en ninguno de los indicadores.")
