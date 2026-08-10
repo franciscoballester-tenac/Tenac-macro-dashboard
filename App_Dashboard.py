@@ -414,24 +414,46 @@ COUNTRY_VIEW_METRICS = [
     ("Financial","EMBI Spread (bps)",            "EMBI (JPM)",                     "EMBI Spread (bps)",                             ".0f"),
 ]
 
-# Valuation view: los cuatro activos que se comparan contra su propia historia.
-#   direction = "high" -> valor alto significa CARO (REER apreciado, ETF arriba)
-#               "low"  -> valor alto significa BARATO (FX debil, spread ancho)
-#   trend_warn = True  -> serie nominal que puede tener drift estructural (alta inflacion),
-#                         donde el percentil no es una senal de mean reversion.
+# Valuation view: los activos que se comparan contra su propia historia.
+#   direction  = "high" -> valor alto significa CARO (REER apreciado, ETF arriba)
+#                "low"  -> valor alto significa BARATO (FX debil, spread ancho)
+#   trend_warn = True   -> serie nominal que puede tener drift estructural (alta
+#                          inflacion), donde el percentil no es senal de mean reversion.
+#
+# Filas RELATIVAS: en lugar del nivel se evalua el ratio contra un benchmark, asi se
+# separa lo idiosincratico del movimiento del mercado (un spread puede estar en minimos
+# de 10 anios solo porque comprimio todo el asset class).
+#   bench_col   -> columna del MISMO DataFrame que hace de benchmark (el EMBI global
+#                  viene como una columna mas en EMBI.xlsx)
+#   bench_yahoo -> codigo de la hoja MSCI_Agg de Yahoo_Prices (EM, ACWI, LATAM, ...)
 VALUATION_SPECS = [
-    ("FX Spot (LC/USD)",     "FX",                           "FX Spot (daily)", ".4g", "low",  True,
-     "Nominal spot, moneda local por USD. Valor alto = moneda debil = FX barato."),
-    ("REER (10Y avg = 100)", "Real Effective Exchange Rate",  "REER Broad (10Y avg = 100)", ".1f", "high", False,
-     "Tipo de cambio real efectivo. Valor alto = moneda apreciada en terminos reales = caro."),
-    ("MSCI ETF (USD)",       "MSCI Country ETFs",             "ETF Price (USD)", ".2f", "high", False,
-     "ETF de pais en USD (iShares). Valor alto = equity caro."),
-    ("EMBI Spread (bps)",    "EMBI (JPM)",                    "EMBI Spread (bps)", ".0f", "low",  False,
-     "Spread soberano en bps. Spread ancho = credito barato."),
-    ("CDS 5Y (bps)",         "Sovereign CDS (5Y)",            "5Y CDS (bps)", ".0f", "low",  False,
-     "CDS soberano a 5 anios en bps. CDS ancho = proteccion cara = credito barato."),
-    ("LC 10Y Yield (%)",     "Local Currency 10Y Yield",      "10Y Yield (%)", ".2f", "low",  False,
-     "Tasa del bono local a 10 anios. Yield alto = precio del bono bajo = barato."),
+    dict(label="FX Spot (LC/USD)", db="FX", metric="FX Spot (daily)",
+         fmt=".4g", direction="low", trend_warn=True,
+         note="Nominal spot, moneda local por USD. Valor alto = moneda debil = FX barato."),
+    dict(label="REER (10Y avg = 100)", db="Real Effective Exchange Rate",
+         metric="REER Broad (10Y avg = 100)", fmt=".1f", direction="high", trend_warn=False,
+         note="Tipo de cambio real efectivo. Valor alto = moneda apreciada en terminos reales = caro."),
+    dict(label="MSCI ETF (USD)", db="MSCI Country ETFs", metric="ETF Price (USD)",
+         fmt=".2f", direction="high", trend_warn=False,
+         note="ETF de pais en USD (iShares). Valor alto = equity caro."),
+    dict(label="MSCI vs EM (x)", db="MSCI Country ETFs", metric="ETF Price (USD)",
+         fmt=".3f", direction="high", trend_warn=False, bench_yahoo="EM",
+         note="ETF del pais dividido el ETF de EM (EEM). Ratio alto = el equity del pais "
+              "esta caro CONTRA el asset class, no solo contra su propio nivel."),
+    dict(label="EMBI Spread (bps)", db="EMBI (JPM)", metric="EMBI Spread (bps)",
+         fmt=".0f", direction="low", trend_warn=False,
+         note="Spread soberano en bps. Spread ancho = credito barato."),
+    dict(label="EMBI vs Global (x)", db="EMBI (JPM)", metric="EMBI Spread (bps)",
+         fmt=".2f", direction="low", trend_warn=False, bench_col="EMBI",
+         note="Spread del pais dividido el EMBI global. Ratio alto = el pais paga mas "
+              "que el indice = credito barato en terminos relativos. Se usa el ratio y no "
+              "la diferencia en bps porque los spreads se mueven de forma multiplicativa."),
+    dict(label="CDS 5Y (bps)", db="Sovereign CDS (5Y)", metric="5Y CDS (bps)",
+         fmt=".0f", direction="low", trend_warn=False,
+         note="CDS soberano a 5 anios en bps. CDS ancho = proteccion cara = credito barato."),
+    dict(label="LC 10Y Yield (%)", db="Local Currency 10Y Yield", metric="10Y Yield (%)",
+         fmt=".2f", direction="low", trend_warn=False,
+         note="Tasa del bono local a 10 anios. Yield alto = precio del bono bajo = barato."),
 ]
 
 # 5. Country groups
@@ -705,6 +727,21 @@ def load_yahoo_msci_raw(route):
     values = values.apply(pd.to_numeric, errors="coerce")
     values = values[[c for c in values.columns if c not in ("nan", "ISO3", "Description")]]
     return values
+
+@st.cache_data
+def load_yahoo_agg_raw(route, sheet="MSCI_Agg"):
+    """Lee una hoja de agregados de Yahoo_Prices (misma estructura que FX/MSCI: 6 filas
+    de header y el codigo en la fila 6, pero los codigos son indices — EM, ACWI, LATAM —
+    en lugar de ISO3). Se usa como benchmark de las filas relativas."""
+    df_raw  = pd.read_excel(get_file(route), sheet_name=sheet, header=None)
+    code_row = df_raw.iloc[5]
+    dates   = pd.to_datetime(df_raw.iloc[6:, 0], errors="coerce")
+    values  = df_raw.iloc[6:, 1:].copy()
+    values.columns = [str(code_row.iloc[j]).strip() for j in range(1, len(code_row))]
+    values.index   = dates
+    values = values.loc[values.index.notna()].sort_index()
+    values = values.apply(pd.to_numeric, errors="coerce")
+    return values[[c for c in values.columns if c not in ("nan", "ISO3", "Description")]]
 
 def transform_bbg_fx(df_raw, iso_mapping, calc_type):
     values = df_raw.copy()
@@ -1134,6 +1171,34 @@ def _val_stats(series, years=10, monthly=True):
                 ratio=(hi / lo if lo > 0 else float("inf")))
 
 
+def _val_series(spec, df_v, country, bench_df=None):
+    """Serie a evaluar para una fila: el nivel del indicador, o su ratio contra un
+    benchmark si la fila es relativa. Devuelve None si falta el pais o el benchmark."""
+    if df_v is None or df_v.empty or country not in df_v.columns:
+        return None
+    s = pd.to_numeric(df_v[country], errors="coerce")
+    if isinstance(s, pd.DataFrame):          # columnas duplicadas: tomar la primera
+        s = s.iloc[:, 0]
+
+    bench = None
+    if spec.get("bench_col"):
+        if spec["bench_col"] not in df_v.columns:
+            return None
+        bench = pd.to_numeric(df_v[spec["bench_col"]], errors="coerce")
+    elif spec.get("bench_yahoo"):
+        if bench_df is None or spec["bench_yahoo"] not in bench_df.columns:
+            return None
+        # el benchmark viene de otra hoja: alinear al indice del pais con ffill
+        bench = pd.to_numeric(bench_df[spec["bench_yahoo"]], errors="coerce")
+        bench = bench.reindex(s.index.union(bench.index)).ffill().reindex(s.index)
+
+    if bench is not None:
+        if isinstance(bench, pd.DataFrame):
+            bench = bench.iloc[:, 0]
+        s = s / bench.replace(0, np.nan)
+    return s.dropna()
+
+
 def _val_bucket(v):
     """v = percentil de valuacion (0 = barato, 100 = caro) -> (etiqueta, color)."""
     if v >= 80: return "EXPENSIVE", "#ED483F"
@@ -1144,19 +1209,33 @@ def _val_bucket(v):
 
 
 if view_mode == "📐 Valuation":
-    # Cargar los cuatro indicadores (cacheados) y armar el universo de paises
+    # Cargar los indicadores (cacheados) y armar el universo de paises
     val_data, val_avail = {}, set()
-    for label, db_key, metric_key, fmt, direction, trend_warn, note in VALUATION_SPECS:
-        df_v = load_df_for_metric(db_key, metric_key)
-        val_data[label] = df_v
+    for spec in VALUATION_SPECS:
+        df_v = load_df_for_metric(spec["db"], spec["metric"])
+        val_data[spec["label"]] = df_v
         if not df_v.empty:
             val_avail |= {c for c in df_v.columns if str(c) != "nan"}
 
+    # Benchmark de las filas relativas que salen de la hoja de agregados de Yahoo
+    val_bench = None
+    if any(sp.get("bench_yahoo") for sp in VALUATION_SPECS):
+        try:
+            val_bench = load_yahoo_agg_raw(
+                os.path.join(DB_BASE_PATH, "Yahoo", "Yahoo_Prices.xlsx").replace("\\", "/"))
+        except Exception:
+            val_bench = None
+
     if not val_avail:
-        st.error("No se pudo cargar ninguno de los cuatro indicadores.")
+        st.error("No se pudo cargar ninguno de los indicadores.")
         st.stop()
 
-    val_countries = sorted(val_avail, key=str.casefold)
+    # Solo paises reales: las bases traen columnas que son agregados (EMBI, HY, IG) y no
+    # tienen que aparecer en el selector de pais.
+    _real = {n for n in list(iso_dicts["ISO3"].values()) + list(iso_dicts["ISO2"].values())
+             if str(n) != "nan"}
+    val_countries = sorted([c for c in val_avail if c in _real], key=str.casefold) \
+                    or sorted(val_avail, key=str.casefold)
     _val_default = val_countries.index("Brazil") if "Brazil" in val_countries else 0
     val_country = st.sidebar.selectbox("🌍 Select Country:", val_countries,
                                        index=_val_default, key="val_country")
@@ -1188,14 +1267,14 @@ if view_mode == "📐 Valuation":
                f"que acotarlo para no romper la escala — el valor real igual se muestra.")
 
     rows = []
-    for label, db_key, metric_key, fmt, direction, trend_warn, note in VALUATION_SPECS:
-        df_v = val_data[label]
-        if df_v.empty or val_country not in df_v.columns:
-            rows.append(dict(label=label, stats=None, fmt=fmt, direction=direction,
-                             trend_warn=trend_warn, note=note))
-            continue
-        rows.append(dict(label=label, stats=_val_stats(df_v[val_country], val_years, val_monthly),
-                         fmt=fmt, direction=direction, trend_warn=trend_warn, note=note))
+    for spec in VALUATION_SPECS:
+        s = _val_series(spec, val_data.get(spec["label"]), val_country, val_bench)
+        rows.append(dict(label=spec["label"], fmt=spec["fmt"], direction=spec["direction"],
+                         trend_warn=spec["trend_warn"], note=spec["note"],
+                         rel=bool(spec.get("bench_col") or spec.get("bench_yahoo")),
+                         series=s,
+                         stats=None if s is None or s.empty
+                               else _val_stats(s, val_years, val_monthly)))
 
     if all(r["stats"] is None for r in rows):
         st.warning(f"No hay datos suficientes para {val_country} en ninguno de los cuatro indicadores.")
@@ -1423,8 +1502,9 @@ if view_mode == "📐 Valuation":
             st_ = r["stats"]
             if st_ is None:
                 continue
-            df_h = val_data[r["label"]]
-            s_h = pd.to_numeric(df_h[val_country], errors="coerce").dropna()
+            s_h = r["series"]          # ya es el nivel o el ratio, segun la fila
+            if s_h is None or s_h.empty:
+                continue
             s_h = s_h.loc[s_h.index >= st_["last_date"] - pd.DateOffset(years=val_years)]
             fig_h = go.Figure(go.Scatter(x=s_h.index, y=s_h.values, mode="lines",
                                          name=r["label"], line=dict(color="#6BBC88", width=1.6)))
