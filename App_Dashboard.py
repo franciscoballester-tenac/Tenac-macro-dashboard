@@ -1208,6 +1208,191 @@ def _val_bucket(v):
     return "CHEAP", "#6BBC88"
 
 
+def _val_pct(row, orient):
+    """Percentil de valuacion de una fila: 0 = barato, 100 = caro. Con la orientacion
+    de precio de activo, las series donde el valor alto es barato (FX, spreads, yields)
+    se dan vuelta; sin ella se devuelve el percentil crudo del indicador."""
+    raw = row["stats"]["pct"]
+    return raw if (row["direction"] == "high" or not orient) else 100 - raw
+
+
+def _val_figure(rows, orient):
+    """Grafico de velas horizontales: una fila por indicador, cada una escalada a su
+    propio rango p1–p99 para que indicadores con unidades distintas sean comparables."""
+    fig_v = go.Figure()
+    wl_x, wl_y, bx_x, bx_y = [], [], [], []
+    med_x, med_y, cap_x, cap_y = [], [], [], []
+    cur_x, cur_y, cur_c, cur_cd, cur_sym = [], [], [], [], []
+    y_labels, annos, verdicts = [], [], []
+    # Cuanto se le permite al marcador salirse de la escala p1–p99 antes de acotarlo.
+    # Sin este tope un actual muy afuera (Bolivia: FX 11.18 vs p99 7.73, o sea 421 en
+    # escala normalizada) estiraria el eje y dejaria la vela en un 20% del ancho.
+    _OVER = 8.0
+
+    def _n(v, lo, hi):
+        return 50.0 if hi <= lo else (v - lo) / (hi - lo) * 100.0
+
+    for r in rows:
+        lab, st_, fmt = r["label"], r["stats"], r["fmt"]
+        if st_ is None:
+            y_labels.append(lab)
+            annos.append(dict(x=50, y=lab, text="sin datos suficientes", showarrow=False,
+                              font=dict(color="#888", size=12)))
+            continue
+        y_labels.append(lab)
+        # La escala de cada fila va de p1 a p99, no de min a max: asi un tick corrupto
+        # o un outlier aislado no estira el eje y aplasta toda la distribucion.
+        # El actual puede caer FUERA de ese rango (p.ej. EMBI en minimos) y en ese caso
+        # el marcador se dibuja mas alla del bigote, que es justamente la senal.
+        lo, hi = st_["p01"], st_["p99"]
+        val_pct = _val_pct(r, orient)
+        bname, bcol = _val_bucket(val_pct)
+
+        # En FX, spreads y yields el valor alto significa BARATO, asi que con la
+        # orientacion de precio de activo esas filas se dibujan con el eje invertido.
+        # De esa forma "a la derecha = caro" vale para todas las filas y alcanza con
+        # buscar el marcador mas a la derecha para ver que esta mas caro.
+        flip = orient and r["direction"] == "low"
+        _x = (lambda v: 100.0 - _n(v, lo, hi)) if flip else (lambda v: _n(v, lo, hi))
+        # con el eje invertido las puntas cambian de lado: a la izquierda queda p99
+        lo_lbl, hi_lbl = (hi, lo) if flip else (lo, hi)
+
+        # Posicion real del actual y posicion dibujada (acotada a la banda de desborde).
+        # Si hubo que acotarla, el marcador pasa a ser un triangulo apuntando hacia
+        # afuera para avisar que el valor esta fuera de escala; el numero real igual se
+        # muestra en el chip y en el hover.
+        _ncur  = _x(st_["last"])
+        _ndraw = min(max(_ncur, -_OVER), 100 + _OVER)
+        if _ncur > 100 + _OVER:
+            cur_sym.append("triangle-right")
+        elif _ncur < -_OVER:
+            cur_sym.append("triangle-left")
+        else:
+            cur_sym.append("diamond")
+
+        wl_x += [0, 100, None];                       wl_y += [lab, lab, None]
+        bx_x += [_x(st_["p10"]), _x(st_["p90"]), None]
+        bx_y += [lab, lab, None]
+        med_x.append(_x(st_["med"]));                 med_y.append(lab)
+        cap_x += [0, 100];                            cap_y += [lab, lab]
+        cur_x.append(_ndraw);                         cur_y.append(lab)
+        cur_c.append(bcol)
+        cur_cd.append([format(st_["last"], fmt), format(st_["p01"], fmt), format(st_["p10"], fmt),
+                       format(st_["med"], fmt), format(st_["p90"], fmt), format(st_["p99"], fmt),
+                       f"{st_['pct']:.0f}", f"{val_pct:.0f}", bname, st_["n_months"],
+                       _fmt_period(st_["last_date"]), format(st_["min"], fmt),
+                       format(st_["max"], fmt)])
+
+        # Las etiquetas de p1/p99 van DEBAJO de la linea (yshift -18) y el valor actual
+        # ARRIBA (yshift +20), asi ninguna compite horizontalmente con un marcador
+        # parado en la punta o desbordado. Tres bandas limpias: chip arriba, marcas en
+        # la linea, extremos abajo.
+        annos.append(dict(x=0, y=lab, text=format(lo_lbl, fmt), showarrow=False,
+                          xanchor="center", yshift=-18, font=dict(color="#9A9A9A", size=11)))
+        annos.append(dict(x=100, y=lab, text=format(hi_lbl, fmt), showarrow=False,
+                          xanchor="center", yshift=-18, font=dict(color="#9A9A9A", size=11)))
+        annos.append(dict(x=_ndraw, y=lab, text=f"<b>{format(st_['last'], fmt)}</b>",
+                          showarrow=False, yshift=20, font=dict(color=bcol, size=13),
+                          bgcolor="rgba(0,0,0,0.55)", borderpad=2))
+        verdicts.append((lab, f"p{val_pct:.0f} · {bname}", bcol))
+
+    # El eje se estira para dar lugar a los marcadores que caen fuera de p1–p99, y la
+    # columna de veredictos se ancla a la derecha del mas extremo para que quede
+    # alineada en todas las filas.
+    _fin = [x for x in cur_x if x is not None and np.isfinite(x)]
+    x_verdict = max(113.0, max(_fin) + 9) if _fin else 113.0
+    x_left    = min(-13.0, min(_fin) - 9) if _fin else -13.0
+    for lab, txt, col in verdicts:
+        annos.append(dict(x=x_verdict, y=lab, text=txt, showarrow=False,
+                          xanchor="left", font=dict(color=col, size=12)))
+
+    # Leyenda de direccion: con la orientacion activada la derecha es caro en todas las
+    # filas; sin ella el eje es el valor crudo del indicador y la direccion no es unica.
+    annos.append(dict(
+        xref="paper", yref="paper", x=1, y=1.03, xanchor="right", yanchor="bottom",
+        showarrow=False, font=dict(size=12),
+        text=("<span style='color:#6BBC88'>◀ barato</span>"
+              "<span style='color:#9A9A9A'>&#160;&#160;·&#160;&#160;</span>"
+              "<span style='color:#ED483F'>caro ▶</span>")
+             if orient else
+             "<span style='color:#9A9A9A'>◀ valor bajo · valor alto ▶</span>"))
+
+    fig_v.add_trace(go.Scatter(x=wl_x, y=wl_y, mode="lines", name="p1–p99",
+                               line=dict(color="rgba(255,255,255,0.40)", width=2),
+                               hoverinfo="skip", connectgaps=False))
+    fig_v.add_trace(go.Scatter(x=cap_x, y=cap_y, mode="markers", showlegend=False,
+                               marker=dict(symbol="line-ns", size=16,
+                                           line=dict(color="rgba(255,255,255,0.40)", width=2)),
+                               hoverinfo="skip"))
+    fig_v.add_trace(go.Scatter(x=bx_x, y=bx_y, mode="lines", name="p10–p90",
+                               line=dict(color="rgba(50,69,185,0.55)", width=16),
+                               hoverinfo="skip", connectgaps=False))
+    fig_v.add_trace(go.Scatter(x=med_x, y=med_y, mode="markers", name="median",
+                               marker=dict(symbol="line-ns", size=26,
+                                           line=dict(color="#FFFFFF", width=3)),
+                               hoverinfo="skip"))
+    fig_v.add_trace(go.Scatter(
+        x=cur_x, y=cur_y, mode="markers", name="current",
+        marker=dict(symbol=cur_sym, size=15, color=cur_c,
+                    line=dict(color="#0E1117", width=2)),   # anillo de 2px contra el fondo
+        customdata=cur_cd,
+        hovertemplate=("<b>%{y}</b><br>Actual: %{customdata[0]} (%{customdata[10]})<br>"
+                       "max: %{customdata[12]}<br>p99: %{customdata[5]}<br>"
+                       "p90: %{customdata[4]}<br>median: %{customdata[3]}<br>"
+                       "p10: %{customdata[2]}<br>p1: %{customdata[1]}<br>"
+                       "min: %{customdata[11]}<br>"
+                       "Percentil crudo: %{customdata[6]}<br>"
+                       "<b>Valuacion: p%{customdata[7]} · %{customdata[8]}</b><br>"
+                       "n = %{customdata[9]} meses<extra></extra>")))
+
+    fig_v.update_layout(
+        # 80px por fila: alcanza para el chip (+20) y la etiqueta de extremo (-18) sin
+        # que se toquen entre filas contiguas
+        height=140 + 80 * max(len(y_labels), 1),
+        margin=dict(l=10, r=60, t=30, b=40),
+        xaxis=dict(range=[x_left, x_verdict + 39], showgrid=False, zeroline=False,
+                   showticklabels=False, title=None),
+        yaxis=dict(categoryorder="array", categoryarray=y_labels[::-1],
+                   showgrid=False, zeroline=False, ticksuffix="  "),
+        annotations=annos,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        hoverlabel=dict(font_size=13),
+    )
+    return fig_v
+
+
+def _val_table(rows, orient):
+    """Tabla con los numeros exactos de cada fila, indexada por indicador."""
+    tbl = []
+    for r in rows:
+        st_, fmt = r["stats"], r["fmt"]
+        if st_ is None:
+            tbl.append({"Indicator": r["label"], "Min": "—", "p1": "—", "p10": "—",
+                        "Median": "—", "p90": "—", "p99": "—", "Max": "—", "Current": "—",
+                        "Pctile": "—", "Valuation": "—", "From": "—", "As of": "—",
+                        "n (meses)": "—"})
+            continue
+        val_pct = _val_pct(r, orient)
+        bname, _ = _val_bucket(val_pct)
+        tbl.append({"Indicator": r["label"],
+                    "Min": format(st_["min"], fmt), "p1": format(st_["p01"], fmt),
+                    "p10": format(st_["p10"], fmt), "Median": format(st_["med"], fmt),
+                    "p90": format(st_["p90"], fmt), "p99": format(st_["p99"], fmt),
+                    "Max": format(st_["max"], fmt), "Current": format(st_["last"], fmt),
+                    "Pctile": f"{st_['pct']:.0f}", "Valuation": f"p{val_pct:.0f} · {bname}",
+                    # "From" = arranque real de la distribucion, que no siempre coincide
+                    # con la ventana pedida (hay series que empiezan mucho despues).
+                    # str() en n para que la columna no mezcle int con el "—" de las
+                    # filas sin datos: pyarrow no puede serializar eso y Streamlit avisa.
+                    # n va en meses (no en tamanio de muestra) para que las filas sean
+                    # comparables: si fuera el tamanio de muestra, una serie de 10 meses
+                    # en base diaria mostraria 315 contra los 121 de una de 10 anios.
+                    "From": _fmt_period(st_["start"]),
+                    "As of": _fmt_period(st_["last_date"]),
+                    "n (meses)": str(st_["n_months"])})
+    return pd.DataFrame(tbl).set_index("Indicator")
+
+
 if view_mode == "📐 Valuation":
     # Cargar los indicadores (cacheados) y armar el universo de paises
     val_data, val_avail = {}, set()
@@ -1253,15 +1438,15 @@ if view_mode == "📐 Valuation":
     st.markdown(f"## {val_country} — Valuation vs own history")
     st.caption(f"Ventana: ultimos {val_years} anios · distribucion en base "
                f"{'mensual (fin de mes)' if val_monthly else 'diaria (dato crudo)'} · "
-               f"cada barra esta escalada a su propio rango p1–p99, por eso los cuatro "
-               f"indicadores son comparables aunque tengan unidades distintas. "
-               + ("**En las cuatro filas la derecha es caro**: el eje de FX y EMBI se "
-                  "invierte (valor alto = moneda debil / spread ancho = barato), asi que "
-                  "el marcador mas a la derecha es el activo mas caro. "
+               f"cada barra esta escalada a su propio rango p1–p99, por eso indicadores "
+               f"con unidades distintas son comparables. "
+               + ("**La derecha es caro en todas las filas**: el eje de FX, spreads y "
+                  "yields se invierte (valor alto = moneda debil / spread ancho = "
+                  "barato), asi que el marcador mas a la derecha es el mas caro. "
                   if val_orient else
-                  "El eje es el valor crudo del indicador, asi que la direccion no es "
-                  "la misma en las cuatro filas (activa la orientacion de precio de "
-                  "activo para que la derecha sea caro en todas). ") +
+                  "El eje es el valor crudo del indicador, asi que la direccion no es la "
+                  "misma en todas las filas (activa la orientacion de precio de activo "
+                  "para que la derecha sea caro en todas). ") +
                f"Un marcador mas alla de la punta del bigote = el actual esta fuera del "
                f"rango p1–p99; si aparece como triangulo (▶ ◀) esta tan afuera que hubo "
                f"que acotarlo para no romper la escala — el valor real igual se muestra.")
@@ -1277,225 +1462,74 @@ if view_mode == "📐 Valuation":
                                else _val_stats(s, val_years, val_monthly)))
 
     if all(r["stats"] is None for r in rows):
-        st.warning(f"No hay datos suficientes para {val_country} en ninguno de los cuatro indicadores.")
+        st.warning(f"No hay datos suficientes para {val_country} en ninguno de los indicadores.")
         st.stop()
 
-    # ── Grafico: una vela horizontal por indicador, en espacio min-max normalizado
-    fig_v = go.Figure()
-    wl_x, wl_y, bx_x, bx_y = [], [], [], []
-    med_x, med_y, cap_x, cap_y = [], [], [], []
-    cur_x, cur_y, cur_c, cur_cd, cur_sym = [], [], [], [], []
-    y_labels, annos, verdicts = [], [], []
-    # Cuanto se le permite al marcador salirse de la escala p1–p99 antes de acotarlo.
-    # Sin este tope un actual muy afuera (Bolivia: FX 11.18 vs p99 7.73, o sea 421 en
-    # escala normalizada) estiraria el eje y dejaria la vela en un 20% del ancho.
-    _OVER = 8.0
+    # Dos bloques separados. Mezclarlos en un solo grafico confunde las dos lecturas:
+    # el nivel dice si el activo esta caro contra su propia historia, y el relativo si
+    # lo esta contra su benchmark — un spread puede estar en minimos de 10 anios y aun
+    # asi estar en la mediana contra el indice, porque comprimio todo el asset class.
+    VAL_SECTIONS = [
+        ("abs", "📊 Nivel absoluto",
+         "Cada indicador contra su propio nivel historico.",
+         [r for r in rows if not r["rel"]]),
+        ("rel", "⚖️ Relativo al benchmark",
+         "El indicador dividido su benchmark (EMBI global, EEM), para separar lo "
+         "idiosincratico del movimiento del asset class.",
+         [r for r in rows if r["rel"]]),
+    ]
 
-    def _n(v, lo, hi):
-        return 50.0 if hi <= lo else (v - lo) / (hi - lo) * 100.0
-
-    for r in rows:
-        lab, st_, fmt = r["label"], r["stats"], r["fmt"]
-        if st_ is None:
-            y_labels.append(lab)
-            annos.append(dict(x=50, y=lab, text="sin datos suficientes", showarrow=False,
-                              font=dict(color="#888", size=12)))
+    for _tag, _title, _blurb, _rws in VAL_SECTIONS:
+        if not _rws:
             continue
-        y_labels.append(lab)
-        # La escala de cada fila va de p1 a p99, no de min a max: asi un tick corrupto
-        # o un outlier aislado no estira el eje y aplasta toda la distribucion.
-        # El actual puede caer FUERA de ese rango (p.ej. EMBI en minimos) y en ese caso
-        # el diamante se dibuja mas alla del bigote, que es justamente la senal.
-        lo, hi = st_["p01"], st_["p99"]
-        val_pct = st_["pct"] if (r["direction"] == "high" or not val_orient) else 100 - st_["pct"]
-        bname, bcol = _val_bucket(val_pct)
+        st.markdown(f"### {_title}")
+        st.caption(_blurb)
+        st.plotly_chart(_val_figure(_rws, val_orient), use_container_width=True,
+                        config={"displayModeBar": False}, key=f"valfig_{_tag}")
 
-        # En FX y EMBI el valor alto significa BARATO, asi que con la orientacion de
-        # precio de activo esas filas se dibujan con el eje invertido. De esa forma
-        # "a la derecha = caro" vale para los cuatro indicadores y alcanza con buscar
-        # el marcador mas a la derecha para ver que esta mas caro.
-        flip = val_orient and r["direction"] == "low"
-        _x = (lambda v: 100.0 - _n(v, lo, hi)) if flip else (lambda v: _n(v, lo, hi))
-        # con el eje invertido las puntas cambian de lado: a la izquierda queda p99
-        lo_lbl, hi_lbl = (hi, lo) if flip else (lo, hi)
+        # Lectura directa: que esta caro y que esta barato dentro de este bloque.
+        # Con una sola fila con datos los dos tiles dirian lo mismo, asi que se omiten.
+        _scored = sorted(((r["label"], _val_pct(r, val_orient))
+                          for r in _rws if r["stats"] is not None),
+                         key=lambda t: t[1], reverse=True)
+        if len(_scored) >= 2:
+            c_rich, c_cheap = st.columns(2)
+            c_rich.metric("Mas caro vs su historia", _scored[0][0], f"p{_scored[0][1]:.0f}")
+            c_cheap.metric("Mas barato vs su historia", _scored[-1][0], f"p{_scored[-1][1]:.0f}")
 
-        # Posicion real del actual y posicion dibujada (acotada a la banda de desborde).
-        # Si hubo que acotarla, el marcador pasa a ser un triangulo apuntando hacia
-        # afuera para avisar que el valor esta fuera de escala; el numero real igual se
-        # muestra en el chip y en el hover.
-        _ncur = _x(st_["last"])
-        _ndraw = min(max(_ncur, -_OVER), 100 + _OVER)
-        if _ncur > 100 + _OVER:
-            cur_sym.append("triangle-right")
-        elif _ncur < -_OVER:
-            cur_sym.append("triangle-left")
-        else:
-            cur_sym.append("diamond")
+        st.dataframe(_val_table(_rws, val_orient), use_container_width=True)
 
-        wl_x += [0, 100, None];                       wl_y += [lab, lab, None]
-        bx_x += [_x(st_["p10"]), _x(st_["p90"]), None]
-        bx_y += [lab, lab, None]
-        med_x.append(_x(st_["med"]));                 med_y.append(lab)
-        cap_x += [0, 100];                            cap_y += [lab, lab]
-        cur_x.append(_ndraw);                         cur_y.append(lab)
-        cur_c.append(bcol)
-        cur_cd.append([format(st_["last"], fmt), format(st_["p01"], fmt), format(st_["p10"], fmt),
-                       format(st_["med"], fmt), format(st_["p90"], fmt), format(st_["p99"], fmt),
-                       f"{st_['pct']:.0f}", f"{val_pct:.0f}", bname, st_["n_months"],
-                       _fmt_period(st_["last_date"]), format(st_["min"], fmt),
-                       format(st_["max"], fmt)])
+        # Aviso cuando la historia efectiva es mucho mas corta que la ventana pedida:
+        # hay series que arrancan bastante despues, asi que su "percentil de 10 anios"
+        # puede salir de dos anios de datos y no ser comparable al resto.
+        _short = []
+        for r in _rws:
+            st_ = r["stats"]
+            if st_ is None:
+                continue
+            _yrs = (st_["end"] - st_["start"]).days / 365.25
+            if _yrs < val_years * 0.6:
+                _short.append(f"**{r['label']}**: {_yrs:.1f} anios "
+                              f"(desde {_fmt_period(st_['start'])}, "
+                              f"n={st_['n_months']} meses)")
+        if _short:
+            st.caption("⚠️ Ojo: estos indicadores tienen menos historia que la ventana de "
+                       f"{val_years} anios pedida, asi que su percentil sale de una muestra "
+                       "mas corta y no es del todo comparable con el resto — "
+                       + " · ".join(_short))
 
-        # Etiquetas de p1 / p99 en las puntas del bigote y el valor actual sobre su
-        # marcador (a 20px de altura, asi no pisa las de las puntas).
-        _ncur = _n(st_["last"], lo, hi)
-        # Las etiquetas de p1/p99 van DEBAJO de la linea (yshift -18) en lugar de
-        # inline: asi nunca compiten horizontalmente con un marcador parado en la punta
-        # o desbordado. Quedan tres bandas limpias: chip arriba, marcas en la linea,
-        # extremos abajo.
-        annos.append(dict(x=0, y=lab, text=format(lo_lbl, fmt), showarrow=False, xanchor="center",
-                          yshift=-18, font=dict(color="#9A9A9A", size=11)))
-        annos.append(dict(x=100, y=lab, text=format(hi_lbl, fmt), showarrow=False, xanchor="center",
-                          yshift=-18, font=dict(color="#9A9A9A", size=11)))
-        annos.append(dict(x=_ndraw, y=lab, text=f"<b>{format(st_['last'], fmt)}</b>",
-                          showarrow=False, yshift=20, font=dict(color=bcol, size=13),
-                          bgcolor="rgba(0,0,0,0.55)", borderpad=2))
-        verdicts.append((lab, f"p{val_pct:.0f} · {bname}", bcol))
-
-    # El eje se estira para dar lugar a los diamantes que caen fuera de p1–p99, y la
-    # columna de veredictos se ancla a la derecha del marcador mas extremo para que
-    # quede alineada en todas las filas.
-    _fin = [x for x in cur_x if x is not None and np.isfinite(x)]
-    x_verdict = max(113.0, max(_fin) + 9) if _fin else 113.0
-    x_left    = min(-13.0, min(_fin) - 9) if _fin else -13.0
-    for lab, txt, col in verdicts:
-        annos.append(dict(x=x_verdict, y=lab, text=txt, showarrow=False,
-                          xanchor="left", font=dict(color=col, size=12)))
-
-    # Leyenda de direccion: con la orientacion activada la derecha es caro en las cuatro
-    # filas; sin ella el eje es el valor crudo del indicador y la direccion no es unica.
-    annos.append(dict(
-        xref="paper", yref="paper", x=1, y=1.03, xanchor="right", yanchor="bottom",
-        showarrow=False, font=dict(size=12),
-        text=("<span style='color:#6BBC88'>◀ barato</span>"
-              "<span style='color:#9A9A9A'>&#160;&#160;·&#160;&#160;</span>"
-              "<span style='color:#ED483F'>caro ▶</span>")
-             if val_orient else
-             "<span style='color:#9A9A9A'>◀ valor bajo · valor alto ▶</span>"))
-
-    fig_v.add_trace(go.Scatter(x=wl_x, y=wl_y, mode="lines", name="p1–p99",
-                               line=dict(color="rgba(255,255,255,0.40)", width=2),
-                               hoverinfo="skip", connectgaps=False))
-    fig_v.add_trace(go.Scatter(x=cap_x, y=cap_y, mode="markers", showlegend=False,
-                               marker=dict(symbol="line-ns", size=16,
-                                           line=dict(color="rgba(255,255,255,0.40)", width=2)),
-                               hoverinfo="skip"))
-    fig_v.add_trace(go.Scatter(x=bx_x, y=bx_y, mode="lines", name="p10–p90",
-                               line=dict(color="rgba(50,69,185,0.55)", width=16),
-                               hoverinfo="skip", connectgaps=False))
-    fig_v.add_trace(go.Scatter(x=med_x, y=med_y, mode="markers", name="median",
-                               marker=dict(symbol="line-ns", size=26,
-                                           line=dict(color="#FFFFFF", width=3)),
-                               hoverinfo="skip"))
-    fig_v.add_trace(go.Scatter(
-        x=cur_x, y=cur_y, mode="markers", name="current",
-        marker=dict(symbol=cur_sym, size=15, color=cur_c,
-                    line=dict(color="#0E1117", width=2)),   # anillo de 2px contra el fondo
-        customdata=cur_cd,
-        hovertemplate=("<b>%{y}</b><br>Actual: %{customdata[0]} (%{customdata[10]})<br>"
-                       "max: %{customdata[12]}<br>p99: %{customdata[5]}<br>"
-                       "p90: %{customdata[4]}<br>median: %{customdata[3]}<br>"
-                       "p10: %{customdata[2]}<br>p1: %{customdata[1]}<br>"
-                       "min: %{customdata[11]}<br>"
-                       "Percentil crudo: %{customdata[6]}<br>"
-                       "<b>Valuacion: p%{customdata[7]} · %{customdata[8]}</b><br>"
-                       "n = %{customdata[9]} meses<extra></extra>")))
-
-    fig_v.update_layout(
-        # 80px por fila: alcanza para el chip (+20) y la etiqueta de extremo (-18) sin
-        # que se toquen entre filas contiguas
-        height=140 + 80 * max(len(y_labels), 1),
-        margin=dict(l=10, r=60, t=30, b=40),
-        xaxis=dict(range=[x_left, x_verdict + 39], showgrid=False, zeroline=False,
-                   showticklabels=False, title=None),
-        yaxis=dict(categoryorder="array", categoryarray=y_labels[::-1],
-                   showgrid=False, zeroline=False, ticksuffix="  "),
-        annotations=annos,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-        hoverlabel=dict(font_size=13),
-    )
-    st.plotly_chart(fig_v, use_container_width=True, config={"displayModeBar": False})
-
-    # ── Lectura directa: que esta caro y que esta barato
-    _scored = [(r["label"], (r["stats"]["pct"] if (r["direction"] == "high" or not val_orient)
-                             else 100 - r["stats"]["pct"]))
-               for r in rows if r["stats"] is not None]
-    if _scored:
-        _scored.sort(key=lambda t: t[1], reverse=True)
-        _rich, _cheap = _scored[0], _scored[-1]
-        c_rich, c_cheap = st.columns(2)
-        c_rich.metric("Mas caro vs su historia", _rich[0], f"p{_rich[1]:.0f}")
-        c_cheap.metric("Mas barato vs su historia", _cheap[0], f"p{_cheap[1]:.0f}")
-
-    # ── Tabla con los seis numeros exactos
-    tbl = []
-    for r in rows:
-        st_, fmt = r["stats"], r["fmt"]
-        if st_ is None:
-            tbl.append({"Indicator": r["label"], "Min": "—", "p1": "—", "p10": "—",
-                        "Median": "—", "p90": "—", "p99": "—", "Max": "—", "Current": "—",
-                        "Pctile": "—", "Valuation": "—", "From": "—", "As of": "—",
-                        "n (meses)": "—"})
-            continue
-        val_pct = st_["pct"] if (r["direction"] == "high" or not val_orient) else 100 - st_["pct"]
-        bname, _ = _val_bucket(val_pct)
-        tbl.append({"Indicator": r["label"],
-                    "Min": format(st_["min"], fmt), "p1": format(st_["p01"], fmt),
-                    "p10": format(st_["p10"], fmt), "Median": format(st_["med"], fmt),
-                    "p90": format(st_["p90"], fmt), "p99": format(st_["p99"], fmt),
-                    "Max": format(st_["max"], fmt), "Current": format(st_["last"], fmt),
-                    "Pctile": f"{st_['pct']:.0f}", "Valuation": f"p{val_pct:.0f} · {bname}",
-                    # "From" = arranque real de la distribucion, que no siempre coincide
-                    # con la ventana pedida (hay series que empiezan mucho despues).
-                    # str() en n para que la columna no mezcle int con el "—" de las
-                    # filas sin datos: pyarrow no puede serializar eso y Streamlit avisa.
-                    # n va en meses (no en tamanio de muestra) para que las filas sean
-                    # comparables: si fuera el tamanio de muestra, una serie de 10 meses
-                    # en base diaria mostraria 315 contra los 121 de una de 10 anios.
-                    "From": _fmt_period(st_["start"]),
-                    "As of": _fmt_period(st_["last_date"]),
-                    "n (meses)": str(st_["n_months"])})
-    st.dataframe(pd.DataFrame(tbl).set_index("Indicator"), use_container_width=True)
-
-    # Aviso cuando la historia efectiva es mucho mas corta que la ventana pedida: el
-    # LC10y de BBG, por ejemplo, arranca en 2024 para varios paises, asi que su
-    # "percentil de 10 anios" sale de dos anios de datos y no es comparable al resto.
-    _short = []
-    for r in rows:
-        st_ = r["stats"]
-        if st_ is None:
-            continue
-        _yrs = (st_["end"] - st_["start"]).days / 365.25
-        if _yrs < val_years * 0.6:
-            _short.append(f"**{r['label']}**: {_yrs:.1f} anios "
-                          f"(desde {_fmt_period(st_['start'])}, "
-                          f"n={st_['n_months']} meses)")
-    if _short:
-        st.caption("⚠️ Ojo: estos indicadores tienen menos historia que la ventana de "
-                   f"{val_years} anios pedida, asi que su percentil sale de una muestra "
-                   "mas corta y no es del todo comparable con el resto — "
-                   + " · ".join(_short))
-
-    # Aviso para series nominales con drift estructural (alta inflacion): el percentil
-    # del FX spot no dice nada de valuacion porque la serie es casi monotona.
-    for r in rows:
-        if r["trend_warn"] and r["stats"] is not None and r["stats"]["ratio"] > 3:
-            st.warning(
-                f"⚠️ **{r['label']}**: en {val_years} anios el spot nominal se movio "
-                f"{r['stats']['ratio']:.1f}x (min {format(r['stats']['min'], r['fmt'])} → "
-                f"max {format(r['stats']['max'], r['fmt'])}). Con esa inflacion la serie es "
-                f"casi monotona, asi que su percentil mide *tendencia*, no valuacion. "
-                f"Para este pais leer el REER."
-            )
+        # Aviso para series nominales con drift estructural (alta inflacion): el
+        # percentil del FX spot no dice nada de valuacion porque es casi monotona.
+        for r in _rws:
+            if r["trend_warn"] and r["stats"] is not None and r["stats"]["ratio"] > 3:
+                st.warning(
+                    f"⚠️ **{r['label']}**: en {val_years} anios el spot nominal se movio "
+                    f"{r['stats']['ratio']:.1f}x (min {format(r['stats']['min'], r['fmt'])} → "
+                    f"max {format(r['stats']['max'], r['fmt'])}). Con esa inflacion la serie "
+                    f"es casi monotona, asi que su percentil mide *tendencia*, no valuacion. "
+                    f"Para este pais leer el REER."
+                )
+        st.divider()
 
     with st.expander("📈 Ver la historia detras de cada vela"):
         for r in rows:
