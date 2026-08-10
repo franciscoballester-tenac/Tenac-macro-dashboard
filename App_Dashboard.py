@@ -426,14 +426,16 @@ COUNTRY_VIEW_METRICS = [
 #   bench_col   -> columna del MISMO DataFrame que hace de benchmark (el EMBI global
 #                  viene como una columna mas en EMBI.xlsx)
 #   bench_yahoo -> codigo de la hoja MSCI_Agg de Yahoo_Prices (EM, ACWI, LATAM, ...)
-#   bench_op    -> "ratio" (default) o "diff". Para spreads conviene tener las dos:
-#                  la DIFERENCIA es lo tradeable (el P&L de estar largo el pais contra
-#                  short el indice) pero su escala depende del nivel del indice, asi que
-#                  su percentil se contamina. En Chile corr(diff, EMBI global) = -0.93 y
-#                  la diferencia marca "el mas barato en 10 anios" cuando en realidad
-#                  esta en su maximo solo porque el indice esta en minimos; el RATIO,
-#                  con corr -0.13, dice correctamente que no cambio nada. El ratio es
-#                  el que hay que leer para valuacion; la diferencia, para tradear.
+#   bench_op    -> "diff" (resta, para spreads y tasas: es la cantidad tradeable, el P&L
+#                  de estar largo el pais contra short el benchmark) o "ratio" (default,
+#                  para precios como los ETF, donde una resta no significa nada).
+#                  Limitacion conocida de "diff": su escala depende del nivel del
+#                  benchmark, asi que en creditos que cotizan muy por dentro del indice
+#                  el percentil se contamina. Chile tiene corr(diff, EMBI global) = -0.93:
+#                  su resta esta en el maximo de 10 anios solo porque el indice esta en
+#                  minimos, no porque Chile se haya abaratado. Cuando el nivel del
+#                  benchmark se movio mucho en la ventana, leer la resta con esa reserva.
+#   bench_scale -> factor sobre el resultado (100 para pasar de puntos porcentuales a bps)
 VALUATION_SPECS = [
     dict(label="FX Spot (LC/USD)", db="FX", metric="FX Spot (daily)",
          fmt=".4g", direction="low", trend_warn=True,
@@ -458,18 +460,19 @@ VALUATION_SPECS = [
               "por dentro del indice. Ojo que su escala depende del nivel del indice, asi "
               "que en creditos muy apretados (Chile, Peru) el percentil se contamina — para "
               "valuacion leer el ratio."),
-    dict(label="EMBI vs Global (x)", db="EMBI (JPM)", metric="EMBI Spread (bps)",
-         fmt=".2f", direction="low", trend_warn=False, bench_col="EMBI",
-         note="Spread del pais dividido el EMBI global. Ratio alto = el pais paga mas "
-              "que el indice = credito barato en terminos relativos. A diferencia de la "
-              "resta, no depende del nivel del indice, asi que su percentil contra la "
-              "historia es el que hay que mirar para valuacion relativa."),
     dict(label="CDS 5Y (bps)", db="Sovereign CDS (5Y)", metric="5Y CDS (bps)",
          fmt=".0f", direction="low", trend_warn=False,
          note="CDS soberano a 5 anios en bps. CDS ancho = proteccion cara = credito barato."),
     dict(label="LC 10Y Yield (%)", db="Local Currency 10Y Yield", metric="10Y Yield (%)",
          fmt=".2f", direction="low", trend_warn=False,
          note="Tasa del bono local a 10 anios. Yield alto = precio del bono bajo = barato."),
+    dict(label="LC 10Y − UST (bps)", db="Local Currency 10Y Yield", metric="10Y Yield (%)",
+         fmt="+.0f", direction="low", trend_warn=False,
+         bench_col="United States", bench_op="diff", bench_scale=100,
+         note="Tasa local a 10 anios menos el UST 10Y (USGG10YR), en bps. Spread ancho = "
+              "el bono local paga mas sobre Treasuries. Tener presente que el gap esta "
+              "dominado por el diferencial de inflacion y depreciacion esperada, no por "
+              "riesgo de credito — el credito en dolares es el EMBI."),
 ]
 
 # 5. Country groups
@@ -1215,6 +1218,7 @@ def _val_series(spec, df_v, country, bench_df=None):
             s = s - bench
         else:
             s = s / bench.replace(0, np.nan)
+        s = s * spec.get("bench_scale", 1)     # 100 para pasar de p.p. a bps
     return s.dropna()
 
 
