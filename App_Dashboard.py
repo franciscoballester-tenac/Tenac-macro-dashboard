@@ -1190,6 +1190,11 @@ def _val_stats(series, years=10, monthly=True):
                 ratio=(hi / lo if lo > 0 else float("inf")))
 
 
+# Cuantas observaciones como maximo se arrastra un benchmark de otro calendario. Cinco
+# cubre feriados y semanas cortas; mas que eso ya seria un hueco de datos, no un feriado.
+_VAL_BENCH_FFILL_LIMIT = 5
+
+
 def _val_series(spec, df_v, country, bench_df=None):
     """Serie a evaluar para una fila: el nivel del indicador, o su ratio/diferencia
     contra un benchmark si la fila es relativa.
@@ -1198,7 +1203,11 @@ def _val_series(spec, df_v, country, bench_df=None):
     falto. Importa distinguir "el pais no tiene el indicador" de "falta el benchmark":
     si no, las dos se ven igual en el grafico y no hay forma de saber si el problema es
     de cobertura del pais o de la serie de referencia (que suele ser un dato viejo en
-    cache tras agregar la columna al archivo)."""
+    cache tras agregar la columna al archivo).
+
+    Los huecos del benchmark no corrompen el resultado: la fecha sale NaN y se descarta,
+    nunca se interpola. Lo que queda sin cubrir aca es cuanto se perdio, y eso se mide
+    en la vista contra la ventana de analisis (ver el aviso de huecos)."""
     if df_v is None or df_v.empty or country not in df_v.columns:
         return None, "sin datos del pais"
     s = pd.to_numeric(df_v[country], errors="coerce")
@@ -1213,19 +1222,25 @@ def _val_series(spec, df_v, country, bench_df=None):
     elif spec.get("bench_yahoo"):
         if bench_df is None or spec["bench_yahoo"] not in bench_df.columns:
             return None, f"falta el benchmark: {spec['bench_yahoo']} (proba 🔄 Refresh Data)"
-        # el benchmark viene de otra hoja: alinear al indice del pais con ffill
+        # El benchmark viene de otra hoja, con su propio calendario: se alinea al indice
+        # del pais arrastrando el ultimo valor, pero con LIMITE. Sin limite, un hueco
+        # largo (un pull de Yahoo que falla) propagaria un precio viejo en silencio y
+        # distorsionaria el ratio; con limite, el hueco sale NaN y la fecha se descarta,
+        # que es visible en la cobertura y en el n de la tabla.
         bench = pd.to_numeric(bench_df[spec["bench_yahoo"]], errors="coerce")
-        bench = bench.reindex(s.index.union(bench.index)).ffill().reindex(s.index)
+        bench = (bench.reindex(s.index.union(bench.index))
+                      .ffill(limit=_VAL_BENCH_FFILL_LIMIT).reindex(s.index))
 
-    if bench is not None:
-        if isinstance(bench, pd.DataFrame):
-            bench = bench.iloc[:, 0]
-        if spec.get("bench_op") == "diff":
-            s = s - bench
-        else:
-            s = s / bench.replace(0, np.nan)
-        s = s * spec.get("bench_scale", 1)     # 100 para pasar de p.p. a bps
-    s = s.dropna()
+    if bench is None:
+        return s.dropna(), None
+
+    if isinstance(bench, pd.DataFrame):
+        bench = bench.iloc[:, 0]
+    if spec.get("bench_op") == "diff":
+        s = s - bench
+    else:
+        s = s / bench.replace(0, np.nan)
+    s = (s * spec.get("bench_scale", 1)).dropna()     # 100 para pasar de p.p. a bps
     if s.empty:
         # el pais y el benchmark existen pero no se solapan en ninguna fecha
         return None, "sin solape con el benchmark"
@@ -1551,6 +1566,27 @@ if view_mode == "📐 Valuation":
                        f"{val_years} anios pedida, asi que su percentil sale de una muestra "
                        "mas corta y no es del todo comparable con el resto — "
                        + " · ".join(_short))
+
+        # Huecos DENTRO de la ventana: se comparan los meses con dato contra los meses
+        # que abarca la serie. Un hueco no corrompe nada (la fecha sale NaN y se
+        # descarta, nunca se interpola). El umbral en 95% esta calibrado sobre huecos
+        # inyectados a mano en el EMBI global: 3 meses faltantes dan 98% y mueven la
+        # mediana 0 bps (no vale avisar), un anio da 91% y la mueve 5 bps, dos anios
+        # dan 81%. O sea que avisa recien cuando falta un pedazo real de historia.
+        _holes = []
+        for r in _rws:
+            st_ = r["stats"]
+            if st_ is None:
+                continue
+            _sp = (st_["end"].to_period("M") - st_["start"].to_period("M")).n + 1
+            if _sp > 0 and st_["n_months"] / _sp < 0.95:
+                _holes.append(f"**{r['label']}**: {st_['n_months']} meses con dato de "
+                              f"{_sp} que abarca ({st_['n_months']/_sp*100:.0f}%)")
+        if _holes:
+            st.caption("⚠️ Huecos en la serie: faltan meses dentro del tramo analizado, "
+                       "asi que el percentil sale de menos datos de los que sugiere la "
+                       "ventana (no se interpola, las fechas sin dato se descartan) — "
+                       + " · ".join(_holes))
 
         # Aviso para series nominales con drift estructural (alta inflacion): el
         # percentil del FX spot no dice nada de valuacion porque es casi monotona.
