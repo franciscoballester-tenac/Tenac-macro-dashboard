@@ -1064,6 +1064,7 @@ except Exception:
 
 st.sidebar.divider()
 view_mode = st.sidebar.radio("", ["📊 Variable View", "🌍 Country View", "📐 Valuation",
+                                  "📉 EMBI Pairs",
                                   "🔀 Cross Variable", "🎯 IT Tracker"],
                              horizontal=True, label_visibility="collapsed")
 st.sidebar.divider()
@@ -1141,6 +1142,165 @@ if view_mode == "🌍 Country View":
             col_spark.plotly_chart(fig_s, use_container_width=True,
                                    config={"displayModeBar": False},
                                    key=f"spark_{db_key}_{metric_key}")
+
+    st.stop()
+
+# ── EMBI PAIRS VIEW ───────────────────────────────────────────────────────────
+if view_mode == "📉 EMBI Pairs":
+    df_embi = load_df_for_metric("EMBI (JPM)", "EMBI Spread (bps)")
+    if df_embi.empty:
+        st.error("No se pudo cargar EMBI.xlsx.")
+        st.stop()
+
+    # El EMBI viene con columnas = nombre de pais y el selector es por ISO3, asi que se
+    # arma el mapa inverso. Los agregados (EMBI, HY, IG) no tienen ISO3 y quedan con su
+    # propio nombre como codigo: comparar un pais contra el indice global es justamente
+    # uno de los usos de esta vista, no se descartan.
+    _name2iso = {v: k for k, v in iso_dicts["ISO3"].items() if str(v) != "nan"}
+    _embi_opts = {}
+    for _col in df_embi.columns:
+        if df_embi[_col].dropna().empty:
+            continue
+        _embi_opts[_name2iso.get(_col, str(_col).strip().upper())] = _col
+    _embi_codes = sorted(_embi_opts, key=str.casefold)
+
+    def _embi_lbl(code):
+        name = str(_embi_opts[code]).strip()
+        return code if name.upper() == code else f"{code} — {name}"
+
+    def _embi_idx(code, fallback):
+        return _embi_codes.index(code) if code in _embi_codes else fallback
+
+    st.sidebar.header("⚙️ Settings")
+    code_a = st.sidebar.selectbox("🅰 Country A:", _embi_codes, index=_embi_idx("ARG", 0),
+                                  format_func=_embi_lbl, key="embi_a")
+    code_b = st.sidebar.selectbox("🅱 Country B:", _embi_codes,
+                                  index=_embi_idx("BRA", min(1, len(_embi_codes) - 1)),
+                                  format_func=_embi_lbl, key="embi_b")
+    embi_period = st.sidebar.radio("Period:", ["1Y", "3Y", "5Y", "10Y", "Max", "Custom"],
+                                   index=2, horizontal=True, key="embi_period")
+    embi_bins = st.sidebar.slider("Histogram bins:", 20, 100, 50, 5, key="embi_bins")
+
+    if code_a == code_b:
+        st.warning("Elegi dos series distintas.")
+        st.stop()
+
+    name_a, name_b = _embi_opts[code_a], _embi_opts[code_b]
+    pair = df_embi[[name_a, name_b]].dropna(how="all")
+    d_first, d_last = pair.index.min(), pair.index.max()
+
+    if embi_period == "Custom":
+        _c1, _c2 = st.sidebar.columns(2)
+        _def0 = max(d_first, d_last - pd.DateOffset(years=5))
+        d0 = pd.Timestamp(_c1.date_input("From:", value=_def0.date(), min_value=d_first.date(),
+                                         max_value=d_last.date(), key="embi_d0"))
+        d1 = pd.Timestamp(_c2.date_input("To:", value=d_last.date(), min_value=d_first.date(),
+                                         max_value=d_last.date(), key="embi_d1"))
+    elif embi_period == "Max":
+        d0, d1 = d_first, d_last
+    else:
+        d0, d1 = d_last - pd.DateOffset(years=int(embi_period[:-1])), d_last
+
+    sub = pair.loc[d0:d1]
+    a_ser, b_ser = sub[name_a].dropna(), sub[name_b].dropna()
+    # El spread se calcula solo sobre los dias que tienen dato en las dos series: si se
+    # rellenara, los feriados de un pais inventarian movimientos del diferencial.
+    sp = (sub[name_a] - sub[name_b]).dropna()
+    if a_ser.empty or b_ser.empty or sp.empty:
+        st.warning("No hay dias con dato para las dos series en el rango elegido.")
+        st.stop()
+
+    C_A_, C_B_ = "#6BBC88", "#F5A623"      # serie A / serie B
+    C_SP_, C_NOW_ = "#6BBC88", "#ED483F"   # spread / valor actual
+    C_BAR_ = "#467886"                     # barras del histograma
+    C_REF_ = "rgba(255,255,255,0.45)"      # lineas de referencia
+
+    sp_last, sp_mean, sp_med = sp.iloc[-1], sp.mean(), sp.median()
+    sp_p10, sp_p90 = sp.quantile(0.10), sp.quantile(0.90)
+    sp_pct = float((sp <= sp_last).mean() * 100)
+    lectura = ("comprimido — CARO vs. su historia" if sp_pct <= 25 else
+               "amplio — BARATO vs. su historia" if sp_pct >= 75 else
+               "en linea con su historia")
+
+    st.markdown(f"## EMBI: {name_a} vs {name_b}")
+    st.caption(f"{sp.index[0]:%d %b %Y} – {sp.index[-1]:%d %b %Y} · {len(sp):,} dias con dato "
+               f"en ambas series · el spread es {code_a} − {code_b} en bps")
+
+    _m1, _m2, _m3, _m4 = st.columns(4)
+    _m1.metric(f"{code_a}", f"{a_ser.iloc[-1]:,.0f} bps",
+               f"{a_ser.iloc[-1] - a_ser.iloc[0]:+,.0f} vs inicio", delta_color="inverse")
+    _m2.metric(f"{code_b}", f"{b_ser.iloc[-1]:,.0f} bps",
+               f"{b_ser.iloc[-1] - b_ser.iloc[0]:+,.0f} vs inicio", delta_color="inverse")
+    _m3.metric(f"Spread {code_a} − {code_b}", f"{sp_last:,.0f} bps",
+               f"{sp_last - sp.iloc[0]:+,.0f} vs inicio", delta_color="inverse")
+    _m4.metric("Percentil del spread", f"{sp_pct:.0f}", lectura, delta_color="off")
+
+    # 1. Niveles
+    fig_lv = go.Figure()
+    for _s, _c, _code, _name in ((a_ser, C_A_, code_a, name_a), (b_ser, C_B_, code_b, name_b)):
+        fig_lv.add_trace(go.Scatter(x=_s.index, y=_s.values, mode="lines",
+                                    name=f"{_code} · {_name}", line=dict(color=_c, width=2),
+                                    hovertemplate=f"{_code}: %{{y:,.0f}} bps<extra></extra>"))
+        fig_lv.add_annotation(x=_s.index[-1], y=_s.iloc[-1], text=f"<b>{_code} {_s.iloc[-1]:,.0f}</b>",
+                              showarrow=False, xanchor="left", xshift=8, font=dict(color=_c, size=13))
+    fig_lv.update_layout(xaxis_title="", yaxis_title="bps", hovermode="x unified",
+                         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, title=""),
+                         margin=dict(r=90))
+    fig_lv.update_yaxes(gridcolor="rgba(255,255,255,0.1)")
+    st.markdown("#### 1 · Evolucion de ambos EMBI")
+    st.plotly_chart(fig_lv, use_container_width=True, key="embi_levels")
+
+    # 2. Spread
+    fig_sp = go.Figure(go.Scatter(x=sp.index, y=sp.values, mode="lines",
+                                  line=dict(color=C_SP_, width=2), name="Spread",
+                                  hovertemplate="%{y:,.0f} bps<extra></extra>"))
+    fig_sp.add_hline(y=sp_mean, line=dict(color=C_REF_, width=1.5, dash="dash"),
+                     annotation_text=f"promedio {sp_mean:,.0f}", annotation_position="top left")
+    if sp.min() < 0 < sp.max():
+        fig_sp.add_hline(y=0, line=dict(color="white", width=1.5))
+    fig_sp.add_annotation(x=sp.index[-1], y=sp_last, text=f"<b>{sp_last:,.0f}</b>",
+                          showarrow=False, xanchor="left", xshift=8, font=dict(color=C_SP_, size=13))
+    fig_sp.update_layout(xaxis_title="", yaxis_title="bps", hovermode="x unified",
+                         showlegend=False, margin=dict(r=70))
+    fig_sp.update_yaxes(gridcolor="rgba(255,255,255,0.1)")
+    st.markdown(f"#### 2 · Spread {code_a} − {code_b}")
+    st.plotly_chart(fig_sp, use_container_width=True, key="embi_spread")
+
+    # 3. Distribucion. Se arman los bins a mano (en vez de go.Histogram) para poder
+    # pintar de otro color el bin donde cae el valor de hoy.
+    _cnt, _edges = np.histogram(sp.values.astype(float), bins=embi_bins)
+    _ctr = (_edges[:-1] + _edges[1:]) / 2
+    _k = int(np.clip(np.searchsorted(_edges, sp_last, side="right") - 1, 0, len(_cnt) - 1))
+    _colors = [C_NOW_ if i == _k else C_BAR_ for i in range(len(_cnt))]
+    fig_hi = go.Figure(go.Bar(
+        x=_ctr, y=_cnt, width=np.diff(_edges) * 0.92, marker_color=_colors,
+        customdata=np.stack([_edges[:-1], _edges[1:]], axis=-1),
+        hovertemplate="%{customdata[0]:,.0f} a %{customdata[1]:,.0f} bps<br>%{y:,.0f} dias<extra></extra>",
+    ))
+    fig_hi.add_vline(x=float(sp_last), line=dict(color=C_NOW_, width=2.5),
+                     annotation_text=f"<b>hoy {sp_last:,.0f} · pct {sp_pct:.0f}</b>",
+                     annotation_position="top", annotation_font=dict(color=C_NOW_))
+    for _x, _lab in ((sp_med, "mediana"), (sp_p10, "p10"), (sp_p90, "p90")):
+        fig_hi.add_vline(x=float(_x), line=dict(color=C_REF_, width=1, dash="dash"),
+                         annotation_text=f"{_lab} {_x:,.0f}", annotation_position="bottom",
+                         annotation_font=dict(size=11, color="rgba(255,255,255,0.7)"))
+    fig_hi.update_layout(xaxis_title=f"Spread {code_a} − {code_b} (bps)", yaxis_title="Dias",
+                         showlegend=False, bargap=0)
+    fig_hi.update_yaxes(gridcolor="rgba(255,255,255,0.1)")
+    fig_hi.update_xaxes(gridcolor="rgba(255,255,255,0.05)")
+    st.markdown("#### 3 · Distribucion del spread y donde esta hoy")
+    st.plotly_chart(fig_hi, use_container_width=True, key="embi_hist")
+    st.caption(f"min {sp.min():,.0f} · p10 {sp_p10:,.0f} · mediana {sp_med:,.0f} · "
+               f"promedio {sp_mean:,.0f} · p90 {sp_p90:,.0f} · max {sp.max():,.0f} bps — "
+               f"el valor de hoy ({sp_last:,.0f}) esta en el percentil {sp_pct:.0f}: {lectura}.")
+
+    with st.expander("📄 Datos"):
+        _tbl = pd.DataFrame({code_a: sub[name_a], code_b: sub[name_b],
+                             f"{code_a}−{code_b}": sub[name_a] - sub[name_b]})
+        st.dataframe(_tbl.sort_index(ascending=False), use_container_width=True)
+        st.download_button("⬇️ Descargar CSV", _tbl.to_csv().encode("utf-8"),
+                           file_name=f"EMBI_{code_a}_{code_b}_{d0:%Y%m%d}_{d1:%Y%m%d}.csv",
+                           mime="text/csv", key="embi_dl")
 
     st.stop()
 
