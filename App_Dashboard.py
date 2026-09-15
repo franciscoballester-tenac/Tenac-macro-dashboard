@@ -513,7 +513,37 @@ GROUP_CATEGORIES = {
                    "Africa", "EM Asia", "DM Europe", "DM Asia-Pac", "DM Americas"],
     "Tradeable":  ["Any Tradeable", "Has FX Data", "Has MSCI Data", "Has NDF Data", "Has LC Yield", "Has EM Spread"],
     "Credit Rating": [],   # populated at runtime after loading FI Monitor
+    "FX Regime":  [],      # populated at runtime desde la hoja FX de Yahoo_Prices
 }
+
+# ── Regimen cambiario: definicion ad hoc a partir de la hoja FX ───────────────
+# No existe una lista oficial de "floaters" en la base, asi que la inferimos de
+# como se mueve el tipo de cambio. Tres estadisticos sobre una ventana movil:
+#
+#   vol      Volatilidad anualizada (%) de las variaciones mensuales del FX.
+#            El nivel mensual se toma como la MEDIANA del mes, no el cierre:
+#            Yahoo mete ticks sueltos malos (QAT pasa de 3.639 a 3.504 y vuelve
+#            al dia siguiente) que inflan cualquier desvio estandar diario. La
+#            mediana mensual los ignora por construccion.
+#   two_way  min(% de meses de apreciacion, % de meses de depreciacion). Un
+#            float se mueve para los dos lados; un crawl o una devaluacion
+#            administrada se mueve para uno solo aunque tenga vol alta (TUR,
+#            ARG, VEN, BOL pasan el filtro de vol pero no este).
+#   still    % de dias sin cambio (|var| < 0.05%). Delata la tablita: si el BC
+#            fija el precio, muchos dias repiten exactamente el mismo numero.
+#
+# Ancla: la vol se mide contra el USD salvo que la moneda se mueva claramente
+# menos contra el EUR (DNK, SRB, ROU estan clavadas al euro, asi que contra el
+# dolar parecen flotar). Solo se reasigna el ancla si la vol contra el EUR es
+# de nivel peg (< peg_vol), para no confundir correlacion con paridad fija.
+FX_REGIME_DEFAULTS = {
+    "years":     3,      # ventana de estimacion
+    "float_vol": 4.5,    # vol anualizada minima para llamarlo floater
+    "peg_vol":   2.0,    # por debajo de esto es peg
+    "still_peg": 50.0,   # % de dias sin cambio que alcanza para peg por si solo
+    "two_way":   15.0,   # min% de meses en la direccion menos frecuente
+}
+FX_REGIME_ORDER = ["Floaters", "Managed", "Crawl / Step-deval", "Pegged"]
 
 # S&P rating scale, best → worst quality
 RATING_ORDER = [
@@ -1037,6 +1067,150 @@ def load_rating_groups(fi_route, iso3_map):
         return {}
 
 
+@st.cache_data
+def load_fx_regime_stats(yahoo_route, years):
+    """Estadisticos de regimen cambiario por ISO3 a partir de la hoja FX.
+
+    Devuelve un DataFrame indexado por ISO3 con anchor / vol / two_way / still /
+    drift. Ver el bloque FX_REGIME_DEFAULTS para que mide cada uno y por que.
+    """
+    try:
+        daily = load_yahoo_fx_raw(yahoo_route)
+    except Exception:
+        return pd.DataFrame()
+    if daily.empty:
+        return pd.DataFrame()
+
+    end   = daily.index.max()
+    start = end - pd.DateOffset(years=int(years))
+    win   = daily.loc[start:end]
+
+    # Mediana mensual: inmune a los ticks sueltos de Yahoo, que en varias
+    # monedas pegadas (QAT, MAR, BHR) son la mitad de la varianza diaria.
+    try:
+        monthly = win.resample("ME").median()
+    except ValueError:
+        monthly = win.resample("M").median()
+    lr = np.log(monthly.where(monthly > 0)).diff()
+
+    eur = lr["EMU"] if "EMU" in lr.columns else None
+    rows = {}
+    for c in win.columns:
+        if c in ("DXY", "XDR", "EMU"):
+            continue
+        s_usd = lr[c].dropna()
+        if len(s_usd) < 18:
+            continue
+        alive = win[c].dropna()
+        if alive.empty or (end - alive.index.max()).days > 60:
+            continue          # serie discontinuada: no clasificar
+
+        vol_usd = s_usd.std() * np.sqrt(12) * 100
+        anchor_name, vol, s = "USD", vol_usd, s_usd
+        if eur is not None:
+            s_eur   = (lr[c] - eur).dropna()
+            vol_eur = s_eur.std() * np.sqrt(12) * 100
+            if vol_eur < vol_usd and vol_eur < FX_REGIME_DEFAULTS["peg_vol"]:
+                anchor_name, vol, s = "EUR", vol_eur, s_eur
+
+        d = np.log(alive.where(alive > 0)).diff().dropna()
+        rows[c] = {
+            "anchor":  anchor_name,
+            "vol":     vol,
+            "two_way": min((s < -0.001).mean(), (s > 0.001).mean()) * 100,
+            "still":   (d.abs() < 0.0005).mean() * 100,
+            "drift":   s_usd.mean() * 12 * 100,
+        }
+    return pd.DataFrame(rows).T if rows else pd.DataFrame()
+
+
+def classify_fx_regime(stats, float_vol, peg_vol, still_peg, two_way):
+    """Reparte los ISO3 de `stats` en los cuatro regimenes. El orden importa:
+    peg primero (una tablita puede tener vol alta por un salto discreto), crawl
+    despues (vol alta pero en una sola direccion), y recien ahi el corte de vol."""
+    groups = {k: [] for k in FX_REGIME_ORDER}
+    if stats is None or stats.empty:
+        return groups
+    for code, r in stats.iterrows():
+        if r["still"] >= still_peg or r["vol"] < peg_vol:
+            label = "Pegged"
+        elif r["two_way"] < two_way:
+            label = "Crawl / Step-deval"
+        elif r["vol"] >= float_vol:
+            label = "Floaters"
+        else:
+            label = "Managed"
+        groups[label].append(str(code))
+    return groups
+
+
+def fx_regime_settings():
+    """Umbrales vigentes, tomados de session_state para que los controles del
+    sidebar (que se dibujan mas abajo) reconfiguren los grupos en el proximo rerun.
+    Siembra los defaults aca para que los widgets se creen solo con `key`."""
+    for k, v in FX_REGIME_DEFAULTS.items():
+        st.session_state.setdefault(f"fxreg_{k}", v)
+    return {k: st.session_state[f"fxreg_{k}"] for k in FX_REGIME_DEFAULTS}
+
+
+def _reset_fx_regime():
+    for k, v in FX_REGIME_DEFAULTS.items():
+        st.session_state[f"fxreg_{k}"] = v
+
+
+def render_fx_regime_panel(iso3_map):
+    """Panel del sidebar con la definicion de floater, sus umbrales y el detalle
+    pais por pais. Se dibuja una sola vez por rerun (las vistas son excluyentes)."""
+    with st.sidebar.expander("💱 FX Regime — definicion", expanded=False):
+        st.caption(
+            "Clasificacion ad hoc a partir de la hoja FX de Yahoo_Prices, sin lista "
+            "oficial de por medio. Sobre una ventana movil se miden tres cosas: la "
+            "**vol** anualizada de las variaciones mensuales (nivel mensual = mediana "
+            "del mes, para no comerse los ticks malos de Yahoo), el **two-way** "
+            "— el menor de los dos porcentajes, meses que aprecia vs meses que "
+            "deprecia — y el **still**, el porcentaje de dias que el precio no se "
+            "mueve. La vol se mide contra el USD salvo que la moneda se mueva mucho "
+            "menos contra el EUR (DNK, SRB, ROU)."
+        )
+        st.caption(
+            "**Pegged**: still alto o vol por debajo del piso. · "
+            "**Crawl / Step-deval**: se mueve, pero casi siempre para el mismo lado "
+            "(TUR, ARG, VEN, BOL). · **Floaters**: vol arriba del corte y dos vias. · "
+            "**Managed**: el resto."
+        )
+        c1, c2 = st.columns(2)
+        c1.number_input("Ventana (años)", min_value=1, max_value=20, step=1, key="fxreg_years")
+        c2.number_input("Vol piso floater (%)", min_value=0.5, max_value=30.0, step=0.5,
+                        key="fxreg_float_vol")
+        c3, c4 = st.columns(2)
+        c3.number_input("Vol techo peg (%)", min_value=0.0, max_value=10.0, step=0.5,
+                        key="fxreg_peg_vol")
+        c4.number_input("Two-way min (%)", min_value=0.0, max_value=50.0, step=1.0,
+                        key="fxreg_two_way")
+        st.number_input("Dias sin cambio p/ peg (%)", min_value=10.0, max_value=100.0, step=5.0,
+                        key="fxreg_still_peg")
+        # on_click y no un if: el callback corre antes del rerun, que es la unica
+        # ventana donde Streamlit deja reescribir un key ya ligado a un widget.
+        st.button("Restaurar defaults", key="fxreg_reset", on_click=_reset_fx_regime)
+
+        if FX_REGIME_STATS is not None and not FX_REGIME_STATS.empty:
+            _cfg = fx_regime_settings()
+            _grp = classify_fx_regime(FX_REGIME_STATS, _cfg["float_vol"], _cfg["peg_vol"],
+                                      _cfg["still_peg"], _cfg["two_way"])
+            regime_of = {c: g for g, codes in _grp.items() for c in codes}
+            tbl = FX_REGIME_STATS.copy()
+            tbl["Regime"]  = [regime_of.get(i, "") for i in tbl.index]
+            tbl["Country"] = [iso3_map.get(i, i) for i in tbl.index]
+            tbl = tbl.rename(columns={"anchor": "Anchor", "vol": "Vol %",
+                                      "two_way": "Two-way %", "still": "Still %",
+                                      "drift": "Drift %"})
+            tbl = tbl[["Country", "Regime", "Anchor", "Vol %", "Two-way %", "Still %", "Drift %"]]
+            tbl = tbl.sort_values(["Regime", "Vol %"], ascending=[True, False])
+            st.dataframe(tbl.round(1), use_container_width=True, hide_index=True, height=300)
+        else:
+            st.info("Sin datos de FX para clasificar.")
+
+
 # 5. MAIN APP LOGIC
 iso_dicts = load_iso_mapping(ISO_PATH)
 
@@ -1051,6 +1225,21 @@ try:
     _rating_groups = load_rating_groups(FI_MONITOR_PATH, iso_dicts["ISO3"])
     COUNTRY_GROUPS.update(_rating_groups)
     GROUP_CATEGORIES["Credit Rating"] = [r for r in RATING_ORDER if r in _rating_groups]
+except Exception:
+    pass
+
+FX_REGIME_STATS = pd.DataFrame()
+try:
+    _yahoo_r = os.path.join(DB_BASE_PATH, "Yahoo", "Yahoo_Prices.xlsx").replace("\\", "/")
+    _fx_set  = fx_regime_settings()
+    FX_REGIME_STATS = load_fx_regime_stats(_yahoo_r, _fx_set["years"])
+    _fx_groups = classify_fx_regime(
+        FX_REGIME_STATS, _fx_set["float_vol"], _fx_set["peg_vol"],
+        _fx_set["still_peg"], _fx_set["two_way"],
+    )
+    _fx_groups = {k: v for k, v in _fx_groups.items() if v}
+    COUNTRY_GROUPS.update(_fx_groups)
+    GROUP_CATEGORIES["FX Regime"] = [g for g in FX_REGIME_ORDER if g in _fx_groups]
 except Exception:
     pass
 
@@ -1836,6 +2025,8 @@ if view_mode == "🔀 Cross Variable":
     _avail_cats_cv = [k for k in GROUP_CATEGORIES if GROUP_CATEGORIES[k]]
     _cv_grp_type = st.sidebar.radio("", _avail_cats_cv, horizontal=True,
                                     label_visibility="collapsed", key="cv_grp_type")
+    if _cv_grp_type == "FX Regime":
+        render_fx_regime_panel(iso_dicts["ISO3"])
     _cv_grp_opts = ["—"] + [g for g in GROUP_CATEGORIES[_cv_grp_type] if g in COUNTRY_GROUPS]
     cv_group = st.sidebar.selectbox("", _cv_grp_opts, label_visibility="collapsed", key="cv_grp")
     col_add, col_clear = st.sidebar.columns(2)
@@ -2315,6 +2506,8 @@ st.sidebar.markdown("**⚡ Quick select group:**")
 _avail_cats = [k for k in GROUP_CATEGORIES if GROUP_CATEGORIES[k]]
 _grp_type = st.sidebar.radio("", _avail_cats, horizontal=True,
                               label_visibility="collapsed", key=f"grp_type_{selected_db}")
+if _grp_type == "FX Regime":
+    render_fx_regime_panel(iso_dicts["ISO3"])
 _grp_opts = ["—"] + [g for g in GROUP_CATEGORIES[_grp_type] if g in COUNTRY_GROUPS]
 selected_group = st.sidebar.selectbox("", _grp_opts, label_visibility="collapsed", key=f"grp_{selected_db}")
 col_add, col_clear = st.sidebar.columns(2)
