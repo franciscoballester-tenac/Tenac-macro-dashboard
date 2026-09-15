@@ -544,6 +544,8 @@ FX_REGIME_DEFAULTS = {
     "two_way":   15.0,   # min% de meses en la direccion menos frecuente
 }
 FX_REGIME_ORDER = ["Floaters", "Managed", "Crawl / Step-deval", "Pegged"]
+FX_REGIME_MIN_OBS   = 18   # retornos mensuales minimos para estimar una vol
+FX_REGIME_MIN_YEARS = 2    # ventana minima que puede juntar esos 18 retornos
 
 # S&P rating scale, best → worst quality
 RATING_ORDER = [
@@ -1099,7 +1101,7 @@ def load_fx_regime_stats(yahoo_route, years):
         if c in ("DXY", "XDR", "EMU"):
             continue
         s_usd = lr[c].dropna()
-        if len(s_usd) < 18:
+        if len(s_usd) < FX_REGIME_MIN_OBS:
             continue
         alive = win[c].dropna()
         if alive.empty or (end - alive.index.max()).days > 60:
@@ -1147,10 +1149,41 @@ def classify_fx_regime(stats, float_vol, peg_vol, still_peg, two_way):
 def fx_regime_settings():
     """Umbrales vigentes, tomados de session_state para que los controles del
     sidebar (que se dibujan mas abajo) reconfiguren los grupos en el proximo rerun.
-    Siembra los defaults aca para que los widgets se creen solo con `key`."""
+    Siembra los defaults aca para que los widgets se creen solo con `key`.
+
+    Todo valor se sanea antes de salir. Si un umbral roto llega al calculo, los
+    cuatro grupos quedan vacios, la categoria FX Regime desaparece del selector
+    y el panel se vuelve inalcanzable: el usuario pierde la unica via para
+    deshacer lo que acaba de tocar. Dos formas de romperlo, las dos reales:
+    vaciar una caja (number_input devuelve None) y pedir una ventana de 1 anio,
+    que deja 12 retornos mensuales contra los FX_REGIME_MIN_OBS que exige la
+    estimacion y se queda sin un solo pais.
+
+    Se llama una sola vez por rerun y antes de que existan los widgets, que es
+    la unica ventana donde se puede escribir un key ligado a un widget. Por eso
+    devuelve el valor saneado Y lo escribe de vuelta: si solo lo devolviera, la
+    caja seguiria mostrando el valor roto mientras el calculo usa otro."""
+    out = {}
     for k, v in FX_REGIME_DEFAULTS.items():
-        st.session_state.setdefault(f"fxreg_{k}", v)
-    return {k: st.session_state[f"fxreg_{k}"] for k in FX_REGIME_DEFAULTS}
+        key = f"fxreg_{k}"
+        st.session_state.setdefault(key, v)
+        cur = st.session_state[key]
+        out[k] = v if cur is None else cur
+    try:
+        out["years"] = max(FX_REGIME_MIN_YEARS, int(out["years"]))
+    except (TypeError, ValueError):
+        out["years"] = FX_REGIME_DEFAULTS["years"]
+    for k, val in out.items():
+        st.session_state[f"fxreg_{k}"] = val
+    return out
+
+
+def fx_regime_note():
+    """Si la categoria no llego a armarse, decirlo. Antes fallaba en silencio: la
+    categoria simplemente no aparecia en el selector y no habia forma de saber
+    por que."""
+    if FX_REGIME_ERROR and not GROUP_CATEGORIES.get("FX Regime"):
+        st.sidebar.caption(f"💱 FX Regime no disponible — {FX_REGIME_ERROR}")
 
 
 def _reset_fx_regime():
@@ -1179,7 +1212,8 @@ def render_fx_regime_panel(iso3_map):
             "**Managed**: el resto."
         )
         c1, c2 = st.columns(2)
-        c1.number_input("Ventana (años)", min_value=1, max_value=20, step=1, key="fxreg_years")
+        c1.number_input("Ventana (años)", min_value=FX_REGIME_MIN_YEARS, max_value=20,
+                        step=1, key="fxreg_years")
         c2.number_input("Vol piso floater (%)", min_value=0.5, max_value=30.0, step=0.5,
                         key="fxreg_float_vol")
         c3, c4 = st.columns(2)
@@ -1194,7 +1228,7 @@ def render_fx_regime_panel(iso3_map):
         st.button("Restaurar defaults", key="fxreg_reset", on_click=_reset_fx_regime)
 
         if FX_REGIME_STATS is not None and not FX_REGIME_STATS.empty:
-            _cfg = fx_regime_settings()
+            _cfg = FX_REGIME_SETTINGS
             _grp = classify_fx_regime(FX_REGIME_STATS, _cfg["float_vol"], _cfg["peg_vol"],
                                       _cfg["still_peg"], _cfg["two_way"])
             regime_of = {c: g for g, codes in _grp.items() for c in codes}
@@ -1229,9 +1263,12 @@ except Exception:
     pass
 
 FX_REGIME_STATS = pd.DataFrame()
+FX_REGIME_ERROR = ""
+FX_REGIME_SETTINGS = dict(FX_REGIME_DEFAULTS)
 try:
     _yahoo_r = os.path.join(DB_BASE_PATH, "Yahoo", "Yahoo_Prices.xlsx").replace("\\", "/")
     _fx_set  = fx_regime_settings()
+    FX_REGIME_SETTINGS = _fx_set
     FX_REGIME_STATS = load_fx_regime_stats(_yahoo_r, _fx_set["years"])
     _fx_groups = classify_fx_regime(
         FX_REGIME_STATS, _fx_set["float_vol"], _fx_set["peg_vol"],
@@ -1240,8 +1277,10 @@ try:
     _fx_groups = {k: v for k, v in _fx_groups.items() if v}
     COUNTRY_GROUPS.update(_fx_groups)
     GROUP_CATEGORIES["FX Regime"] = [g for g in FX_REGIME_ORDER if g in _fx_groups]
-except Exception:
-    pass
+    if not _fx_groups:
+        FX_REGIME_ERROR = "la hoja FX no dejo ningun pais clasificable"
+except Exception as _e:
+    FX_REGIME_ERROR = str(_e)
 
 try:
     if USE_DROPBOX_API:
@@ -2027,6 +2066,7 @@ if view_mode == "🔀 Cross Variable":
                                     label_visibility="collapsed", key="cv_grp_type")
     if _cv_grp_type == "FX Regime":
         render_fx_regime_panel(iso_dicts["ISO3"])
+    fx_regime_note()
     _cv_grp_opts = ["—"] + [g for g in GROUP_CATEGORIES[_cv_grp_type] if g in COUNTRY_GROUPS]
     cv_group = st.sidebar.selectbox("", _cv_grp_opts, label_visibility="collapsed", key="cv_grp")
     col_add, col_clear = st.sidebar.columns(2)
@@ -2508,6 +2548,7 @@ _grp_type = st.sidebar.radio("", _avail_cats, horizontal=True,
                               label_visibility="collapsed", key=f"grp_type_{selected_db}")
 if _grp_type == "FX Regime":
     render_fx_regime_panel(iso_dicts["ISO3"])
+fx_regime_note()
 _grp_opts = ["—"] + [g for g in GROUP_CATEGORIES[_grp_type] if g in COUNTRY_GROUPS]
 selected_group = st.sidebar.selectbox("", _grp_opts, label_visibility="collapsed", key=f"grp_{selected_db}")
 col_add, col_clear = st.sidebar.columns(2)
