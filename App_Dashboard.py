@@ -1736,9 +1736,10 @@ def _val_figure(rows, orient):
                           xanchor="center", yshift=-18, font=dict(color="#9A9A9A", size=11)))
         annos.append(dict(x=100, y=lab, text=format(hi_lbl, fmt), showarrow=False,
                           xanchor="center", yshift=-18, font=dict(color="#9A9A9A", size=11)))
-        # La mediana va en la misma banda de abajo que los extremos, en blanco como su marca
+        # La mediana va debajo de su marca, en blanco como ella. Mas abajo que los extremos
+        # (-28 vs -18) porque la marca mide 26px y a -18 el numero la toca.
         annos.append(dict(x=_x(st_["med"]), y=lab, text=format(st_["med"], fmt), showarrow=False,
-                          xanchor="center", yshift=-18, font=dict(color="#FFFFFF", size=11)))
+                          xanchor="center", yshift=-28, font=dict(color="#FFFFFF", size=11)))
         annos.append(dict(x=_ndraw, y=lab, text=f"<b>{format(st_['last'], fmt)}</b>",
                           showarrow=False, yshift=20, font=dict(color=bcol, size=13),
                           bgcolor="rgba(0,0,0,0.55)", borderpad=2))
