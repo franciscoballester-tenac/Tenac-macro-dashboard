@@ -437,9 +437,6 @@ COUNTRY_VIEW_METRICS = [
 #                  benchmark se movio mucho en la ventana, leer la resta con esa reserva.
 #   bench_scale -> factor sobre el resultado (100 para pasar de puntos porcentuales a bps)
 VALUATION_SPECS = [
-    dict(label="FX Spot (LC/USD)", db="FX", metric="FX Spot (daily)",
-         fmt=".4g", direction="low", trend_warn=True,
-         note="Nominal spot, moneda local por USD. Valor alto = moneda debil = FX barato."),
     dict(label="REER (10Y avg = 100)", db="Real Effective Exchange Rate",
          metric="REER Broad (10Y avg = 100)", fmt=".1f", direction="high", trend_warn=False,
          note="Tipo de cambio real efectivo. Valor alto = moneda apreciada en terminos reales = caro."),
@@ -1731,7 +1728,7 @@ def _val_figure(rows, orient):
                        _fmt_period(st_["last_date"]), format(st_["min"], fmt),
                        format(st_["max"], fmt)])
 
-        # Las etiquetas de p1/p99 van DEBAJO de la linea (yshift -18) y el valor actual
+        # Las etiquetas de p1/p99 y la mediana van DEBAJO de la linea (yshift -18) y el valor actual
         # ARRIBA (yshift +20), asi ninguna compite horizontalmente con un marcador
         # parado en la punta o desbordado. Tres bandas limpias: chip arriba, marcas en
         # la linea, extremos abajo.
@@ -1739,6 +1736,9 @@ def _val_figure(rows, orient):
                           xanchor="center", yshift=-18, font=dict(color="#9A9A9A", size=11)))
         annos.append(dict(x=100, y=lab, text=format(hi_lbl, fmt), showarrow=False,
                           xanchor="center", yshift=-18, font=dict(color="#9A9A9A", size=11)))
+        # La mediana va en la misma banda de abajo que los extremos, en blanco como su marca
+        annos.append(dict(x=_x(st_["med"]), y=lab, text=format(st_["med"], fmt), showarrow=False,
+                          xanchor="center", yshift=-18, font=dict(color="#FFFFFF", size=11)))
         annos.append(dict(x=_ndraw, y=lab, text=f"<b>{format(st_['last'], fmt)}</b>",
                           showarrow=False, yshift=20, font=dict(color=bcol, size=13),
                           bgcolor="rgba(0,0,0,0.55)", borderpad=2))
@@ -1878,7 +1878,7 @@ if view_mode == "📐 Valuation":
     val_basis = st.sidebar.radio("Distribution basis:", ["Monthly", "Daily / raw"],
                                  index=0, horizontal=True, key="val_basis")
     val_orient = st.sidebar.checkbox("Asset-price orientation", value=True, key="val_orient",
-                                     help="Invierte FX y EMBI para que en todos los casos "
+                                     help="Invierte spreads y yields para que en todos los casos "
                                           "'alto' signifique CARO. Si lo destildas, se muestra "
                                           "el percentil crudo del indicador.")
     val_monthly = (val_basis == "Monthly")
