@@ -287,12 +287,12 @@ DATABASES = {
         }
     },
     "EMBI (JPM)": {
-        "file": "EMBI/EMBI.xlsx",
+        "file": "EMBI/EMBI Div.xlsx",
         "iso_format": "ISO3",
         "loader": "embi",
-        "source": "JPMorgan / Bloomberg",
+        "source": "JPMorgan EMBIG Diversified / Bloomberg",
         "metrics": {
-            "EMBI Spread (bps)": {"sheet": "Spreads", "calc": None, "fmt": ".0f"}
+            "EMBI Spread (bps)": {"sheet": "SPREAD_WORST_DURTN_WEIGHTED", "calc": None, "fmt": ".0f"}
         }
     },
     "Inflation Target Deviation": {
@@ -424,7 +424,7 @@ COUNTRY_VIEW_METRICS = [
 # separa lo idiosincratico del movimiento del mercado (un spread puede estar en minimos
 # de 10 anios solo porque comprimio todo el asset class).
 #   bench_col   -> columna del MISMO DataFrame que hace de benchmark (el EMBI global
-#                  viene como una columna mas en EMBI.xlsx)
+#                  viene como una columna mas en EMBI Div.xlsx)
 #   bench_yahoo -> codigo de la hoja MSCI_Agg de Yahoo_Prices (EM, ACWI, LATAM, ...)
 #   bench_op    -> "diff" (resta, para spreads y tasas: es la cantidad tradeable, el P&L
 #                  de estar largo el pais contra short el benchmark) o "ratio" (default,
@@ -837,11 +837,14 @@ def load_citi_cds(route, sheet="5Y"):
     return values
 
 @st.cache_data
-def load_embi(route, sheet="Spreads"):
-    """Lee EMBI.xlsx (JPM/Bloomberg). Estructura: fila 1 = nombre de pais, fila 2 =
-    ticker Bloomberg, datos desde fila 3 con la fecha en la col A (ascendente).
-    Devuelve datos diarios indexados por fecha, columnas = nombre de pais (ya listo,
-    sin traducir ISO). Los agregados (HY, IG, EMBI) se descartan luego por no ser paises."""
+def load_embi(route, sheet="SPREAD_WORST_DURTN_WEIGHTED", iso_mapping=None):
+    """Lee EMBI Div.xlsx (JPM EMBIG Diversified via Bloomberg). Estructura: fila 1 = ISO3
+    (vacio en los agregados), fila 2 = nombre del indice/pais, fila 3 = "Date" + ticker,
+    datos desde fila 4 con la fecha en la col A (ascendente).
+    Devuelve datos diarios indexados por fecha, columnas = nombre de pais. Si hay fila
+    ISO3 y se pasa iso_mapping, el nombre sale del ISO_Master_Table (asi coincide con el
+    resto de las bases). Los agregados se renombran a EMBI / IG / HY para mantener los
+    codigos que usa el dashboard, y se descartan luego por no ser paises."""
     df_raw = pd.read_excel(get_file(route), sheet_name=sheet, header=None)
     # Los nombres de pais estan en la fila inmediatamente arriba de la fila "Date".
     # Robusto al layout viejo (nombres fila 1, Date fila 2) y al nuevo (ISO3 fila 1,
@@ -855,10 +858,19 @@ def load_embi(route, sheet="Spreads"):
         dates = pd.to_datetime(date_col, unit="D", origin="1899-12-30", errors="coerce")
     else:
         dates = pd.to_datetime(date_col, errors="coerce")
-    _fix = {"Cote D'Ivoire": "Ivory Coast"}   # alinear grafia con ISO_Master_Table
+    _fix = {"Cote D'Ivoire": "Ivory Coast", "Cote D'ivoire": "Ivory Coast",
+            "EMBIG Div": "EMBI", "High Grade": "IG", "High Yield": "HY"}
+    _iso_row = df_raw.iloc[0] if _col_a.iloc[0] == "iso3" and _name_idx > 0 else None
+    _cols = []
+    for j in range(1, len(name_row)):
+        nm = str(name_row.iloc[j]).strip()
+        iso = str(_iso_row.iloc[j]).strip() if _iso_row is not None else ""
+        if iso_mapping and iso in iso_mapping:
+            _cols.append(iso_mapping[iso])
+        else:
+            _cols.append(_fix.get(nm, nm))
     values = df_raw.iloc[2:, 1:].copy()
-    values.columns = [_fix.get(str(name_row.iloc[j]).strip(), str(name_row.iloc[j]).strip())
-                      for j in range(1, len(name_row))]
+    values.columns = _cols
     values.index = dates
     values = values.loc[values.index.notna()].sort_index()
     values = values.apply(pd.to_numeric, errors="coerce")
@@ -956,7 +968,7 @@ def load_df_for_metric(db_key, metric_key):
                 df_cds = df_cds.rename(columns=iso_dicts[iso_format])
             return df_cds
         if loader == "embi":
-            return load_embi(file_route, m_cfg["sheet"])
+            return load_embi(file_route, m_cfg["sheet"], iso_dicts["ISO3"])
         if loader == "citi_tot":
             df_citi = load_citi_tot(file_route)
             if iso_dicts[iso_format]:
@@ -1377,7 +1389,7 @@ if view_mode == "🌍 Country View":
 if view_mode == "📉 EMBI Pairs":
     df_embi = load_df_for_metric("EMBI (JPM)", "EMBI Spread (bps)")
     if df_embi.empty:
-        st.error("No se pudo cargar EMBI.xlsx.")
+        st.error("No se pudo cargar EMBI Div.xlsx.")
         st.stop()
 
     # El EMBI viene con columnas = nombre de pais y el selector es por ISO3, asi que se
@@ -2508,7 +2520,7 @@ try:
         if iso_dicts[iso_format]:
             df = df.rename(columns=iso_dicts[iso_format])
     elif loader == "embi":
-        df = load_embi(file_route, m_cfg["sheet"])
+        df = load_embi(file_route, m_cfg["sheet"], iso_dicts["ISO3"])
     elif metric_loader == "it_deviation":
         df = load_it_deviation(file_route, IT_POLITICS_PATH, iso_dicts["ISO3"])
     elif metric_loader == "it_deviation_3m3m":
