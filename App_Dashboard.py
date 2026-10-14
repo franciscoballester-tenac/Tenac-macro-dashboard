@@ -2623,11 +2623,22 @@ with tab_chart:
         fig = px.line(df_filtered, x=df_filtered.index, y=df_filtered.columns,
                       color_discrete_sequence=TENAC_COLORS)
         fig.update_traces(hovertemplate=f"%{{fullData.name}}<br>%{{x}}: %{{y:{val_fmt}}}<extra></extra>")
+        fig.update_layout(
+            xaxis_title="", yaxis_title="",
+            legend_title="Country",
+            hovermode="closest",
+            shapes=[dict(
+                type='line', yref='y', y0=0, y1=0,
+                xref='paper', x0=0, x1=1,
+                line=dict(color="white", width=3, dash="dash")
+            )]
+        )
+        fig.update_yaxes(gridcolor='rgba(255, 255, 255, 0.1)')
         if band_mode == "Across selected countries":
             # solo fechas con al menos 3 paises con dato; con menos el p10/p90 no significa nada
             _cs = df_filtered[df_filtered.notna().sum(axis=1) >= 3]
             if _cs.empty:
-                st.caption("⚠️ Need at least 3 countries with data on the same dates to draw the band.")
+                st.info(" Need at least 3 countries with data on the same dates to draw the band.")
             else:
                 _q10, _q90 = _cs.quantile(0.10, axis=1), _cs.quantile(0.90, axis=1)
                 _band = [
@@ -2646,18 +2657,7 @@ with tab_chart:
                 if len(_s) < 5:
                     continue
                 fig.add_hrect(y0=_s.quantile(0.10), y1=_s.quantile(0.90), line_width=0, layer="below",
-                              fillcolor=_rgba(TENAC_COLORS[_i % len(TENAC_COLORS)], 0.12))
-        fig.update_layout(
-            xaxis_title="", yaxis_title="",
-            legend_title="Country",
-            hovermode="closest",
-            shapes=[dict(
-                type='line', yref='y', y0=0, y1=0,
-                xref='paper', x0=0, x1=1,
-                line=dict(color="white", width=3, dash="dash")
-            )]
-        )
-        fig.update_yaxes(gridcolor='rgba(255, 255, 255, 0.1)')
+                              fillcolor=_rgba(TENAC_COLORS[_i % len(TENAC_COLORS)], 0.2))
         st.plotly_chart(fig, use_container_width=True)
 
 with tab_bar:
@@ -2834,11 +2834,6 @@ if len(selected_countries) == 2 and not df_filtered.empty:
                            key=f"band_sp_{selected_db}_{friendly_metric}")
     fig_spread = px.line(spread, x=spread.index, y=spread.name,
                          color_discrete_sequence=TENAC_COLORS)
-    _sp = spread.dropna()
-    if _band_sp and len(_sp) >= 5:
-        fig_spread.add_hrect(y0=_sp.quantile(0.10), y1=_sp.quantile(0.90), line_width=0, layer="below",
-                             fillcolor=_rgba(TENAC_COLORS[0], 0.15),
-                             annotation_text="p10–p90", annotation_position="top left")
     fig_spread.update_layout(
         xaxis_title="", yaxis_title="",
         showlegend=False,
@@ -2850,6 +2845,11 @@ if len(selected_countries) == 2 and not df_filtered.empty:
         )]
     )
     fig_spread.update_yaxes(gridcolor='rgba(255, 255, 255, 0.1)')
+    _sp = spread.dropna()
+    if _band_sp and len(_sp) >= 5:
+        fig_spread.add_hrect(y0=_sp.quantile(0.10), y1=_sp.quantile(0.90), line_width=0, layer="below",
+                             fillcolor=_rgba(TENAC_COLORS[0], 0.15),
+                             annotation_text="p10–p90", annotation_position="top left")
     st.plotly_chart(fig_spread, use_container_width=True)
 elif len(selected_countries) != 2 and selected_countries:
 
