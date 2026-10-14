@@ -385,6 +385,10 @@ CATEGORY_GROUPS = {
 # Tenac brand color sequence
 TENAC_COLORS = ["#6BBC88", "#3245B9", "#ED483F", "#4EA72E", "#A02B93", "#0E2841", "#467886", "#96607D", "#E8E8E8", "#414042"]
 
+def _rgba(hex_color, alpha):
+    r, g, b = int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
 import plotly.io as pio                                                                                                              
 pio.templates["tenac"] = go.layout.Template(layout=go.Layout(font=dict(size=14)))
 pio.templates.default = "plotly_dark+tenac"
@@ -2610,9 +2614,39 @@ with tab_chart:
     elif df_filtered.empty:
         st.warning("No data for the selected range.")
     else:
+        band_mode = st.radio(
+            "Shade p10–p90:", ["Off", "Across selected countries", "Each country's history"],
+            horizontal=True, key=f"band_{selected_db}_{friendly_metric}",
+            help="Across selected countries: banda del p10 al p90 entre los paises elegidos en cada fecha "
+                 "(dispersion del grupo). Each country's history: franja horizontal con el p10–p90 "
+                 "de cada pais dentro del rango de fechas visible.")
         fig = px.line(df_filtered, x=df_filtered.index, y=df_filtered.columns,
                       color_discrete_sequence=TENAC_COLORS)
         fig.update_traces(hovertemplate=f"%{{fullData.name}}<br>%{{x}}: %{{y:{val_fmt}}}<extra></extra>")
+        if band_mode == "Across selected countries":
+            # solo fechas con al menos 3 paises con dato; con menos el p10/p90 no significa nada
+            _cs = df_filtered[df_filtered.notna().sum(axis=1) >= 3]
+            if _cs.empty:
+                st.caption("⚠️ Need at least 3 countries with data on the same dates to draw the band.")
+            else:
+                _q10, _q90 = _cs.quantile(0.10, axis=1), _cs.quantile(0.90, axis=1)
+                _band = [
+                    go.Scatter(x=_q90.index, y=_q90.values, mode="lines", line=dict(width=0),
+                               showlegend=False, name="p90",
+                               hovertemplate=f"p90: %{{y:{val_fmt}}}<extra></extra>"),
+                    go.Scatter(x=_q10.index, y=_q10.values, mode="lines", line=dict(width=0),
+                               fill="tonexty", fillcolor="rgba(232,232,232,0.18)", name="p10–p90",
+                               hovertemplate=f"p10: %{{y:{val_fmt}}}<extra></extra>"),
+                ]
+                fig.add_traces(_band)
+                fig.data = fig.data[-2:] + fig.data[:-2]  # banda abajo de las lineas
+        elif band_mode == "Each country's history":
+            for _i, _c in enumerate(df_filtered.columns):
+                _s = df_filtered[_c].dropna()
+                if len(_s) < 5:
+                    continue
+                fig.add_hrect(y0=_s.quantile(0.10), y1=_s.quantile(0.90), line_width=0, layer="below",
+                              fillcolor=_rgba(TENAC_COLORS[_i % len(TENAC_COLORS)], 0.12))
         fig.update_layout(
             xaxis_title="", yaxis_title="",
             legend_title="Country",
@@ -2796,8 +2830,15 @@ if len(selected_countries) == 2 and not df_filtered.empty:
     spread = df_filtered[country_a] - df_filtered[country_b]
     spread.name = f"{country_a} − {country_b}"
     st.markdown(f"#### Spread: {country_a} − {country_b}")
+    _band_sp = st.checkbox("Shade p10–p90 of the spread", value=False,
+                           key=f"band_sp_{selected_db}_{friendly_metric}")
     fig_spread = px.line(spread, x=spread.index, y=spread.name,
                          color_discrete_sequence=TENAC_COLORS)
+    _sp = spread.dropna()
+    if _band_sp and len(_sp) >= 5:
+        fig_spread.add_hrect(y0=_sp.quantile(0.10), y1=_sp.quantile(0.90), line_width=0, layer="below",
+                             fillcolor=_rgba(TENAC_COLORS[0], 0.15),
+                             annotation_text="p10–p90", annotation_position="top left")
     fig_spread.update_layout(
         xaxis_title="", yaxis_title="",
         showlegend=False,
